@@ -1,0 +1,15 @@
+http://localhost:3000/
+
+docker-compose up --build --no-cache
+docker compose up --build 
+docker compose downdocker compose down
+
+
+docker system df
+docker compose down -v
+docker system prune -a
+docker builder prune -a
+
+ngrok http 8081
+
+cd NeuralDocker-Selective-main

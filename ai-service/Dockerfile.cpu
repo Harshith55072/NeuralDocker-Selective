@@ -1,0 +1,26 @@
+FROM python:3.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip
+
+# CPU-only build — same pinned llama-cpp-python version as the GPU image,
+# just without the CUDA extra-index-url (pulls the standard PyPI CPU wheel).
+RUN python3 -m pip install --no-cache-dir "llama-cpp-python==0.2.90"
+
+COPY requirements.txt .
+RUN sed -i '/llama-cpp-python/d' requirements.txt && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["python3", "main.py"]

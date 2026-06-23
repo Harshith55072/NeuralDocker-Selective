@@ -1,0 +1,78 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.npm/
+*.tsbuildinfo
+
+# ── Java / Maven ──────────────────────────────────────────────────────────────
+target/
+*.class
+*.jar
+*.war
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ── AI Model Files ────────────────────────────────────────────────────────────
+# These are large binary files — store separately or use Git LFS
+models/
+*.gguf
+*.bin
+*.pt
+*.safetensors
+*.ggml
+
+# ── Recordings ────────────────────────────────────────────────────────────────
+recordings/
+
+# ── Docker & Infrastructure ───────────────────────────────────────────────────
+postgres_data/
+*.log
+
+# ── Ngrok ─────────────────────────────────────────────────────────────────────
+# Contains live tunnel URLs — never commit these
+ngrok_url.txt
+Ngrok/ngrok_url.txt
+
+# ── Secrets & Environment ─────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+.eclipse/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── Coverage & Testing ────────────────────────────────────────────────────────
+coverage/
+htmlcov/
+.coverage
+*.cover
+project.md

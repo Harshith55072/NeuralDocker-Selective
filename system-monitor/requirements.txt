@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+psutil
+gputil
+nvidia-ml-py
+python-multipart

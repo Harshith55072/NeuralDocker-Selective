@@ -1,0 +1,39 @@
+# Dependencies — never copy these, they get installed during build
+node_modules
+.npm
+
+# Build output — gets generated during Docker build
+dist
+build
+
+# Git
+.git
+.gitignore
+
+# AI model files — not needed for frontend build
+models
+*.gguf
+*.bin
+*.pt
+*.safetensors
+
+# Environment files — secrets should not go into the image
+.env
+.env.*
+*.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+
+# Test and coverage
+coverage
+*.test.*

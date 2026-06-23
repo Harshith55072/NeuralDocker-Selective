@@ -1,0 +1,148 @@
+Both ideas are solid and fit naturally into what's already built. Let me break them down before adding to the plan:
+
+---
+
+**On the API hosting tool idea:**
+Yes, completely doable. The ai-service already exposes ports and endpoints, so it's mostly a frontend page that displays each model's connection info cleanly. Good low-effort high-value feature.
+
+**On the node dashboard:**
+This is actually critical infrastructure, not just a nice-to-have. If node model loading is broken or unreliable, multi-node clusters don't really work at all. Needs proper investigation.
+
+**On the timeout/disqualify logic:**
+This is also critical. Right now if one node is slow, `CompletableFuture.allOf(...).join()` in `ConsensusService.java` waits for ALL nodes forever. One slow CPU model can hang the entire cluster response. This needs fixing before multi-node is usable.
+
+---
+
+**UPDATED MASTER PROBLEM REGISTRY**
+
+- **P3** — Public cluster discovery UI
+- **P5** — System resource recording reliability
+- **P6** — Rotation settings missing from UI
+- **P7** — Rotation respects active count not cluster capacity
+- **P8** — Node dashboard: verify and fix remote model loading logic, add error handling
+- **P9** — Slow node timeout: disqualify unresponsive nodes per question instead of waiting forever
+- **P10** — Built-in API hosting tool: dedicated page showing each loaded model as its own API endpoint
+- **Tunnel auth** — ngrok monitor BACKEND_TOKEN still blank
+- **Post-session discussion** — models talking after session ends
+- **`verbose=True`** — needs to go back to False
+
+---
+
+**UPDATED SESSION ROADMAP**
+
+**SESSION 4 — Slow Node Timeout (P9)**
+
+Files: `ConsensusService.java`
+
+This moves up to Session 4 because it's a critical blocker for multi-node use. Currently `CompletableFuture.allOf().join()` waits forever. Fix:
+- Add per-node timeout (configurable, default 60 seconds)
+- Nodes that don't respond in time are marked as timed out for that question
+- Their models are excluded from that round's scoring
+- Consensus continues with whoever responded
+- Repeated timeouts flagged in logs
+
+---
+
+**SESSION 5 — Node Dashboard Audit (P8)**
+
+Files: `ClusterDashboard.jsx`, `ClusterController.java`, `ClusterService.java`, `SystemResources.jsx`
+
+- Paste both files so I can audit remote model loading logic
+- Verify host can load models from another node's queue
+- Verify those models count toward cluster consensus correctly
+- Fix any broken proxy logic
+- Add proper error states to the UI when a node is unreachable
+
+---
+
+**SESSION 6 — Cluster Settings UI (P6)**
+
+Files: `ClusterSettings.jsx`, `ClusterService.java`, `Cluster.java`
+
+- `autoRotate` toggle
+- `autoQueue` toggle
+- `weightedVoting` toggle
+- All wired to backend
+- Add timeout duration as a configurable setting too (from P9)
+
+---
+
+**SESSION 7 — Target Model Count (P7)**
+
+Files: `Cluster.java`, `ConsensusService.java`, `ClusterService.java`
+
+- Add `targetModelCount` field
+- Update on manual load/unload
+- Rotation stays within target count
+- Handle failed load with one retry
+
+---
+
+**SESSION 8 — Post-Session Discussion**
+
+Files: `ConsensusService.java`, `main.py`, `ClusterDashboard.jsx`
+
+- Models exchange messages after session ends
+- Small cache memory per model
+- Configurable number of rounds
+- Frontend displays in discussion panel
+
+---
+
+**SESSION 9 — Public Cluster Discovery (P3)**
+
+Files: `ClusterController.java`, `ClusterService.java`, frontend pages
+
+- List all public clusters via API
+- Password prompt on join
+- Private clusters hidden completely
+- Basic search by name
+
+---
+
+**SESSION 10 — Built-in API Hosting Tool (P10)**
+
+Files: New page `ModelAPI.jsx`, `ClusterController.java`
+
+- New page accessible from cluster dashboard
+- Lists every loaded model across all nodes
+- Shows IP, port, endpoint path for each
+- Shows example curl/fetch request per model
+- Copy button for each endpoint
+- Basically a live API reference for your cluster
+
+---
+
+**SESSION 11 — Ngrok Auth + Security (Tunnel auth)**
+
+Files: `ngrok_monitor.py`, `ClusterController.java`, `SecurityConfiguration.java`
+
+- Wire up BACKEND_TOKEN
+- Authenticate tunnel registration endpoint
+- Review other unauthenticated endpoints
+- Set `verbose=False` in `main.py`
+
+---
+
+**SESSION 12 — System Resource Recording (P5)**
+
+Files: `System_resource_monitor.py`, `SystemResources.jsx`
+
+- Diagnose recording reliability issues
+- Fix start/stop
+- Fix playback
+- Need both files pasted at session start
+
+---
+
+**SESSION 13 — Polish + Bug Sweep**
+
+- Bugs found during S4-S12 testing
+- Hardcoded values cleanup
+- Context menu placeholder actions (restart node, disconnect, terminate)
+- Docker-compose production readiness review
+- Final pass on all error messages and edge cases
+
+---
+
+That's 13 sessions total, 10 remaining. Take your break and just say "Session 4" when ready. I'll remember exactly where we are.

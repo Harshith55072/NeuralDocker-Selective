@@ -1,0 +1,21 @@
+What is your name?
+
+How old are you?
+
+What color is the sky during the day?
+
+Can you count from 1 to 10?
+
+What is 2 + 3?
+
+What day comes after Monday?
+
+What sound does a dog make?
+
+How many legs does a spider have?
+
+What do people drink when they are thirsty?
+
+Which is bigger: an elephant or a mouse?
+
+What do you use to write on paper?

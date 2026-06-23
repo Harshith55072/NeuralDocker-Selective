@@ -1,0 +1,8 @@
+services:
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile.nvidia
+      args:
+        CUDA_BASE_IMAGE: ${CUDA_BASE_IMAGE:-nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04}
+        CUDA_WHEEL_TAG: ${CUDA_WHEEL_TAG:-cu122}

@@ -1,0 +1,139 @@
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: neural_postgres
+    environment:
+      POSTGRES_DB: neuraldb
+      POSTGRES_USER: neuraluser
+      POSTGRES_PASSWORD: neuralpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuraluser -d neuraldb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./Backend/Neural-docker-selective-backend
+    container_name: neural_backend
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/neuraldb
+      SPRING_DATASOURCE_USERNAME: neuraluser
+      SPRING_DATASOURCE_PASSWORD: neuralpass
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      # Service token for internal services (ngrok monitor)
+      # Change this in production — must match SERVICE_TOKEN in ngrok_monitor.py
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-nd-service-token-change-me-in-production}
+      JWT_SECRET: ${JWT_SECRET}
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: neural_pgadmin
+    restart: no
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@neural.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  system-monitor:
+    build:
+      context: ./system-monitor
+    container_name: neural_system_monitor
+    ports:
+      - "8001:8001"
+    volumes:
+      # Persist recordings across container restarts
+      - recordings_data:/app/recordings
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: neural_ai_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+      # Share recordings volume so ai-service can proxy recording endpoints
+      - recordings_data:/app/recordings
+    environment:
+      - MONITOR_URL=http://system-monitor:8001
+      # Controls CPU sampling rate for stats (higher = smoother graphs)
+      - STATS_SAMPLE_INTERVAL=0.5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    depends_on:
+      - system-monitor
+
+  frontend:
+    build:
+      context: ./Frontend
+    container_name: neural_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      # These are build-time env vars — Vite bakes them into the JS bundle
+      # If you change these, rebuild the frontend container
+      - VITE_API_URL=http://localhost:8081
+      - VITE_AI_API_URL=http://localhost:8000
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: neural_ngrok
+    command: start --all --config /etc/ngrok/ngrok.yml --log=stdout
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    volumes:
+      - ./Ngrok/ngrok-docker.yml:/etc/ngrok/ngrok.yml
+    depends_on:
+      - ai-service
+      - backend
+    restart: unless-stopped
+
+  ngrok-monitor:
+    build:
+      context: ./Ngrok
+    container_name: neural_ngrok_monitor
+    environment:
+      - BACKEND_URL=http://backend:8080
+      - SERVICE_TOKEN=${SERVICE_TOKEN:-nd-service-token-change-me-in-production}
+      - NGROK_API_URL=http://ngrok:4040/api/tunnels
+    depends_on:
+      - ngrok
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  recordings_data:

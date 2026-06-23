@@ -1,0 +1,31 @@
+# CPU-only override — for machines with no NVIDIA GPU / nvidia-container-toolkit.
+#
+# Usage (run from the project root, alongside the main docker-compose.yml):
+#   docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+#
+# Leaves the base docker-compose.yml completely untouched, so a normal
+# `docker-compose up` on a GPU machine behaves exactly as it did before —
+# this file only applies when explicitly passed with -f.
+
+services:
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile.cpu
+    # Clears the GPU device reservation from the base file. Without this,
+    # `docker-compose up` refuses to even start the container on a machine
+    # without an NVIDIA GPU + nvidia-container-toolkit, regardless of which
+    # Dockerfile it's built from.
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  system-monitor:
+    # system-monitor doesn't need a Dockerfile swap (it doesn't build
+    # llama-cpp-python), just the same device-reservation override —
+    # otherwise the whole stack still fails to start on a CPU-only box.
+    deploy:
+      resources:
+        reservations:
+          devices: []

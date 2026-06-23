@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Frontend — not needed for backend/ai-service builds
+Frontend/node_modules
+Frontend/dist
+Frontend/build
+
+# Model files — mounted as volume, not baked into image
+models
+*.gguf
+*.bin
+*.pt
+*.safetensors
+
+# Recordings — mounted as volume
+recordings
+
+# Postgres data
+postgres_data
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Ngrok output
+ngrok_url.txt
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+venv
+.venv
