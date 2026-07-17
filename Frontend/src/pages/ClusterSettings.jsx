@@ -219,8 +219,8 @@ const ClusterSettings = () => {
     </div>
   );
 
-  const NInput = ({ value, onChange, min, max, step }) => (
-    <input type="number" min={min} max={max} step={step} value={value} onChange={onChange}
+  const NInput_TEST_MARKER = ({ value, onChange, min, max, step }) => (
+    <input type="number" min={min} max={max} step={step} value={value} onChange={onChange} data-marker="x"
       style={{ background:'var(--bg3)', border:'1px solid var(--border-bright)', color:'var(--text)', fontFamily:'var(--font-mono)', fontSize:13, padding:'7px 12px', borderRadius:'var(--radius-md)', outline:'none', width:100, textAlign:'right', transition:'border-color .15s' }}
       onFocus={e => e.target.style.borderColor = 'var(--accent-border)'}
       onBlur={e => e.target.style.borderColor = 'var(--border-bright)'} />

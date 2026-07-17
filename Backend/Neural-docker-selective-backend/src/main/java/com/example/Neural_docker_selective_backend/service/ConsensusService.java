@@ -1,14 +1,18 @@
 package com.example.Neural_docker_selective_backend.service;
 
 import com.example.Neural_docker_selective_backend.model.Cluster;
+import com.example.Neural_docker_selective_backend.model.ConsensusLog;
 import com.example.Neural_docker_selective_backend.model.ModelInstance;
 import com.example.Neural_docker_selective_backend.model.User;
 import com.example.Neural_docker_selective_backend.model.UserClusterMembership;
 import com.example.Neural_docker_selective_backend.repository.ClusterRepository;
+import com.example.Neural_docker_selective_backend.repository.ConsensusLogRepository;
 import com.example.Neural_docker_selective_backend.repository.ModelInstanceRepository;
 import com.example.Neural_docker_selective_backend.repository.UserClusterMembershipRepository;
 import com.example.Neural_docker_selective_backend.repository.UserRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -29,6 +33,8 @@ public class ConsensusService {
     private final ModelInstanceRepository modelInstanceRepository;
     private final RestTemplate restTemplate;
     private final UserClusterMembershipRepository membershipRepository;
+    private final ConsensusLogRepository consensusLogRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${microservice.gateway.host:ai-service}")
     private String gatewayHost;
@@ -36,12 +42,13 @@ public class ConsensusService {
     @Value("${microservice.gateway.port:8000}")
     private int gatewayPort;
 
-    public ConsensusService(ClusterRepository clusterRepository, UserRepository userRepository, ModelInstanceRepository modelInstanceRepository, RestTemplate restTemplate, UserClusterMembershipRepository membershipRepository) {
+    public ConsensusService(ClusterRepository clusterRepository, UserRepository userRepository, ModelInstanceRepository modelInstanceRepository, RestTemplate restTemplate, UserClusterMembershipRepository membershipRepository, ConsensusLogRepository consensusLogRepository) {
         this.clusterRepository = clusterRepository;
         this.userRepository = userRepository;
         this.modelInstanceRepository = modelInstanceRepository;
         this.restTemplate = restTemplate;
         this.membershipRepository = membershipRepository;
+        this.consensusLogRepository = consensusLogRepository;
     }
 
     // In-memory live discussion feed — keyed by clusterId
@@ -306,6 +313,17 @@ public class ConsensusService {
                 .max(Comparator.comparingDouble(r -> (Double) r.get("avg_score")))
                 .orElse(finalResponses.get(0));
 
+        // Persist this round to consensus_log in background — never let a logging
+        // failure kill the answer. This is what backs the durable history endpoint;
+        // the in-memory `messages` state on the frontend is session-only.
+        final List<Map<String, Object>> responsesForLog = new ArrayList<>(finalResponses);
+        final String winnerModelForLog = (String) winner.get("model");
+        final Integer clusterIdForLog = cluster.getId();
+        final String promptForLog = prompt;
+        final String systemPromptForLog = systemPrompt;
+        CompletableFuture.runAsync(() -> saveConsensusLog(
+                clusterIdForLog, promptForLog, systemPromptForLog, winnerModelForLog, responsesForLog));
+
         // Update stats in background — never let a stats failure kill the answer
         final List<Map<String, Object>> responsesForStats = new ArrayList<>(finalResponses);
         final Map<String, Object> winnerForStats = winner;
@@ -425,6 +443,62 @@ public class ConsensusService {
     public void saveClusterState(Cluster cluster) { 
         clusterRepository.save(cluster); 
     } 
+
+    /**
+     * Persists one consensus round to consensus_log. Called fire-and-forget
+     * from runConsensus — any failure here is logged and swallowed, never
+     * propagated to the caller, since the answer has already been returned.
+     */
+    @Transactional
+    public void saveConsensusLog(Integer clusterId, String prompt, String systemPrompt,
+            String winnerModel, List<Map<String, Object>> finalResponses) {
+        try {
+            ConsensusLog log = new ConsensusLog();
+            log.setClusterId(clusterId);
+            log.setPrompt(prompt);
+            log.setSystemPrompt(systemPrompt);
+            log.setWinnerModel(winnerModel);
+            log.setAnswersJson(objectMapper.writeValueAsString(finalResponses));
+            consensusLogRepository.save(log);
+        } catch (Exception e) {
+            System.err.println("Failed to persist consensus log (non-fatal): " + e.getMessage());
+        }
+    }
+
+    /**
+     * Durable history for a cluster — backs the "History" panel with data that
+     * survives Reset Session, new tabs, and other devices (unlike the frontend's
+     * session-only `messages` state).
+     */
+    public List<Map<String, Object>> getConsensusHistory(String requestingUserEmail, Integer clusterId, int limit) {
+        User requestingUser = userRepository.findByEmail(requestingUserEmail)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (!membershipRepository.existsByUserIdAndClusterId(requestingUser.getId(), clusterId)) {
+            throw new RuntimeException("User is not a member of this cluster");
+        }
+
+        int effectiveLimit = limit > 0 ? Math.min(limit, 500) : 100;
+        List<ConsensusLog> logs = consensusLogRepository.findByClusterIdOrderByCreatedAtDesc(
+                clusterId, PageRequest.of(0, effectiveLimit));
+
+        return logs.stream().map(log -> {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("id", log.getId());
+            entry.put("prompt", log.getPrompt());
+            entry.put("systemPrompt", log.getSystemPrompt());
+            entry.put("winnerModel", log.getWinnerModel());
+            entry.put("createdAt", log.getCreatedAt().toString());
+            List<Map<String, Object>> responses;
+            try {
+                responses = objectMapper.readValue(log.getAnswersJson(), List.class);
+            } catch (Exception e) {
+                responses = List.of();
+            }
+            entry.put("allResponses", responses);
+            return entry;
+        }).collect(Collectors.toList());
+    }
 
     private String getSystemUrl(User sys) {
         // Use ngrok tunnel if available (for cross-machine nodes)

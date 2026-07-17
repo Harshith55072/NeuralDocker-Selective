@@ -30,6 +30,7 @@ public class Cluster {
     private Double temperature = 0.7;
     private String scoringMode = "cumulative";
     private Boolean autoQueue = true;
+    private Boolean sessionHistory = true;
     private Boolean enableDiscussion = false;
     private Boolean anonymousDiscussion = false;
     private String discussionBasePrompt = "";
@@ -279,6 +280,14 @@ public class Cluster {
 
     public void setAutoQueue(Boolean autoQueue) {
         this.autoQueue = autoQueue;
+    }
+
+    public Boolean getSessionHistory() {
+        return sessionHistory != null ? sessionHistory : true;
+    }
+
+    public void setSessionHistory(Boolean sessionHistory) {
+        this.sessionHistory = sessionHistory;
     }
 
     public Boolean getEnableDiscussion() {

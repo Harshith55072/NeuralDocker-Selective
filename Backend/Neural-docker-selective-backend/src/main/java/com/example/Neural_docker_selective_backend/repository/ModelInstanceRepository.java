@@ -9,6 +9,13 @@ import java.util.Optional;
 public interface ModelInstanceRepository extends JpaRepository<ModelInstance, Integer> {
     List<ModelInstance> findByClusterId(Integer clusterId);
     Optional<ModelInstance> findBySystemIdAndName(Integer systemId, String name);
+    // Cluster-scoped variant — the plain findBySystemIdAndName above is NOT unique:
+    // the same physical system+model name can have a row in every cluster that system
+    // belongs to (each cluster tracks its own slots independently). Using the unscoped
+    // version to check "is this already loaded in THIS cluster" throws
+    // IncorrectResultSizeDataAccessException once a 2nd cluster's row exists, and even
+    // when only one row exists it can silently match the WRONG cluster's row.
+    Optional<ModelInstance> findBySystemIdAndNameAndClusterId(Integer systemId, String name, Integer clusterId);
     List<ModelInstance> findAllBySystemIdAndName(Integer systemId, String name);
     List<ModelInstance> findBySystemId(Integer systemId);
 }

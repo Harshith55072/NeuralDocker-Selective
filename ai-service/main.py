@@ -238,6 +238,11 @@ app.add_middleware(
 class PromptRequest(BaseModel):
     prompt: str
     system_prompt: Optional[str] = "You are a helpful AI assistant."
+    # Cluster-level "Max Tokens" / "Temperature" settings — previously stored in the
+    # Cluster entity but never actually sent to the model. Optional so older callers
+    # (discussion endpoint, direct testing) keep working with the module defaults.
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
 
 
 class RateRequest(BaseModel):
@@ -342,7 +347,7 @@ class ConsensusModel:
             except ImportError:
                 pass
 
-    def ask(self, prompt: str, system_prompt: str, max_tokens: int = MAX_TOKENS) -> str: 
+    def ask(self, prompt: str, system_prompt: str, max_tokens: int = MAX_TOKENS, temperature: float = TEMPERATURE) -> str: 
         if Llama is None: 
             # Simulation mode: return a plausible fake answer for testing 
             return ( 

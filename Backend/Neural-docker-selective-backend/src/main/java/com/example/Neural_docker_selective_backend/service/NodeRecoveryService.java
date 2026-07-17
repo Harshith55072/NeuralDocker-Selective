@@ -9,7 +9,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional; 
 import org.springframework.web.client.RestTemplate; 
  
+import java.time.Instant; 
 import java.util.List; 
+import java.util.Map; 
+import java.util.concurrent.ConcurrentHashMap; 
  
 @Service 
 public class NodeRecoveryService { 
@@ -18,16 +21,25 @@ public class NodeRecoveryService {
     private final ClusterRepository clusterRepository; 
     private final RestTemplate restTemplate; 
  
+    // Tracks the last recovery-ping attempt per user id so each cluster's
+    // configured recoveryPingInterval can actually be honored even though the
+    // scheduler itself ticks on a fixed, finer-grained cadence (see below).
+    private final Map<Integer, Instant> lastAttempt = new ConcurrentHashMap<>();
+ 
     public NodeRecoveryService(UserRepository userRepository, ClusterRepository clusterRepository, RestTemplate restTemplate) { 
         this.userRepository = userRepository; 
         this.clusterRepository = clusterRepository; 
         this.restTemplate = restTemplate; 
     } 
  
-    // Runs every 40 seconds — matches default recoveryPingInterval 
-    // Spring's @Scheduled fixedDelay means it waits 40s AFTER the last run finishes 
-    // so overlapping pings can't stack up if a round takes longer than expected 
-    @Scheduled(fixedDelay = 40000) 
+    // Ticks every 5 seconds so we can honor recoveryPingInterval values as low
+    // as the UI's configured minimum (10s) with reasonable precision. This used
+    // to be a flat 40s tick that ignored the per-cluster setting entirely —
+    // recoveryPingInterval was saved and displayed in ClusterSettings but had
+    // no effect on actual ping behavior. Now each node is only actually pinged
+    // once at least cluster.getRecoveryPingInterval() seconds have passed
+    // since its last attempt; the 5s tick is just the scheduler's granularity.
+    @Scheduled(fixedDelay = 5000) 
     @Transactional 
     public void pingOfflineNodes() { 
         // Find all offline nodes across all clusters 
@@ -39,13 +51,18 @@ public class NodeRecoveryService {
             return; 
         } 
  
-        System.out.println("Recovery check: found " + offlineNodes.size() + " offline node(s)."); 
- 
         for (User node : offlineNodes) { 
             // Get the cluster's configured ping interval 
             Cluster cluster = clusterRepository.findById(node.getClusterId()).orElse(null); 
             if (cluster == null) continue; 
- 
+
+            int intervalSeconds = cluster.getRecoveryPingInterval();
+            Instant last = lastAttempt.get(node.getId());
+            if (last != null && Instant.now().isBefore(last.plusSeconds(intervalSeconds))) {
+                continue; // not due yet for this node's cluster interval
+            }
+
+            lastAttempt.put(node.getId(), Instant.now());
             tryRecoverNode(node); 
         } 
     } 

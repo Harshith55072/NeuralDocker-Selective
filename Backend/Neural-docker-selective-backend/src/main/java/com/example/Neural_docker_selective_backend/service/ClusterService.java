@@ -83,6 +83,7 @@ public class ClusterService {
             Integer sessionLimit, Integer sessionAnswers, Integer maxNodeTimeouts,
             Integer recoveryPingInterval, Integer nodeTimeoutSeconds, Integer discussionRounds,
             Integer maxTokens, Double temperature, String scoringMode, Boolean autoQueue,
+            Boolean sessionHistory,
             Boolean enableDiscussion, Boolean anonymousDiscussion, String discussionBasePrompt) {
 
         User user = userRepository.findByEmail(userEmail)
@@ -107,6 +108,7 @@ public class ClusterService {
         if (temperature != null) cluster.setTemperature(temperature);
         if (scoringMode != null) cluster.setScoringMode(scoringMode);
         if (autoQueue != null) cluster.setAutoQueue(autoQueue);
+        if (sessionHistory != null) cluster.setSessionHistory(sessionHistory);
         if (enableDiscussion != null) cluster.setEnableDiscussion(enableDiscussion);
         if (anonymousDiscussion != null) cluster.setAnonymousDiscussion(anonymousDiscussion);
         if (discussionBasePrompt != null) cluster.setDiscussionBasePrompt(discussionBasePrompt);
@@ -313,8 +315,12 @@ public class ClusterService {
                     Integer gpuLayers = respMap.get("gpu_layers") instanceof Number
                             ? ((Number) respMap.get("gpu_layers")).intValue() : 0;
 
+                    // Scoped to THIS cluster — see ModelInstanceRepository for why the
+                    // unscoped findBySystemIdAndName was wrong here (cross-cluster leak +
+                    // "not a unique result" crash once the same system+model existed in
+                    // more than one cluster).
                     boolean alreadyLoaded = modelInstanceRepository
-                            .findBySystemIdAndName(targetUser.getId(), modelName)
+                            .findBySystemIdAndNameAndClusterId(targetUser.getId(), modelName, clusterId)
                             .filter(m -> !Boolean.TRUE.equals(m.getIsEmpty()))
                             .isPresent();
 

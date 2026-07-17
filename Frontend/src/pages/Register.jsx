@@ -29,7 +29,7 @@ const Register = () => {
         navigate('/dashboard');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        setError(errorData.message || 'Registration failed. Email might already be in use.');
+        setError(errorData.error || errorData.message || 'Registration failed. Email might already be in use.');
       }
     } catch (err) {
       setError('Failed to connect to the server. Please ensure the backend is running.');

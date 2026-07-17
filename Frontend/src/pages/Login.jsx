@@ -28,7 +28,7 @@ const Login = () => {
         navigate('/dashboard');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        setError(errorData.message || 'Invalid email or password');
+        setError(errorData.error || errorData.message || 'Invalid email or password');
       }
     } catch (err) {
       setError('Failed to connect to the server. Please ensure the backend is running.');

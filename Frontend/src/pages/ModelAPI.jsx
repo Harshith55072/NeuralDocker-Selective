@@ -372,7 +372,7 @@ print(${answerField})`;
               </div>
               <div className="api-section-body">
                 <div style={{fontSize:12, color:'var(--text-mid)', marginBottom:10}}>
-                  Include your Bearer token in the <code style={{fontFamily:'var(--font-mono)', color:'var(--cyan)'}}>Authorization</code> header on every request.
+                  Include your Bearer token in the <code style={{fontFamily:'var(--font-mono)', color:'var(--accent)'}}>Authorization</code> header on every request.
                 </div>
                 <div className="api-token-row">
                   <div className="api-token-val">
@@ -568,7 +568,7 @@ print(${answerField})`;
                 <div className="api-section">
                   <div className="api-section-header">
                     <span className="api-section-title">Live Test</span>
-                    <span style={{fontSize:11, color:'var(--text-dim)', fontFamily:'var(--mono)'}}>
+                    <span style={{fontSize:11, color:'var(--text-dim)', fontFamily:'var(--font-mono)'}}>
                       {isCluster
                         ? `Sends to all ${onlineModels.length} online model${onlineModels.length !== 1 ? 's' : ''} · counts toward session`
                         : `Sends directly to ${selected.modelName} · no session impact`

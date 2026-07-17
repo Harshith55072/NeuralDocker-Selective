@@ -28,6 +28,18 @@ const PublicRoute = ({ children }) => {
   return children;
 };
 
+// Scrolls the window to the top on every route change. Without this, React
+// Router keeps the previous page's scroll offset, so navigating to a shorter
+// page (e.g. Welcome -> License while scrolled down) lands mid/bottom-page
+// instead of at the top.
+const ScrollToTop = () => {
+  const { pathname } = useLocation();
+  React.useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+};
+
 // Separated so useLocation can be used inside Router context
 const AppContent = () => {
   const location = useLocation();
@@ -36,6 +48,7 @@ const AppContent = () => {
 
   return (
     <>
+      <ScrollToTop />
       <Routes>
         <Route path="/" element={<Welcome />} />
         <Route path="/license" element={<License />} />

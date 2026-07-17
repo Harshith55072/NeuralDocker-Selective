@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getLocalAPI, clearClusterSession } from '../config';
+import { getLocalAPI, clearClusterSession, saveClusterHostUrl } from '../config';
 
 const CLUSTER_API = getLocalAPI();
 
@@ -85,13 +85,13 @@ const JoinCluster = () => {
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.hostTunnelUrl) {
-          localStorage.setItem('clusterBackendUrl', data.hostTunnelUrl);
+          saveClusterHostUrl(cluster.id, data.hostTunnelUrl);
           console.log('Cluster backend URL saved:', data.hostTunnelUrl);
         }
         navigate(`/cluster?id=${cluster.id}`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setBrowseError(data.message || 'Failed to join cluster. Check the password.');
+        setBrowseError(data.error || data.message || 'Failed to join cluster. Check the password.');
         setSelectedCluster(cluster); // Keep modal open on error
       }
     } catch (e) {
@@ -129,13 +129,13 @@ const JoinCluster = () => {
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.hostTunnelUrl) {
-          localStorage.setItem('clusterBackendUrl', data.hostTunnelUrl);
+          saveClusterHostUrl(cleanId, data.hostTunnelUrl);
           console.log('Cluster backend URL saved:', data.hostTunnelUrl);
         }
         navigate(`/cluster?id=${cleanId}`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setManualError(data.message || 'Failed to join cluster.');
+        setManualError(data.error || data.message || 'Failed to join cluster.');
       }
     } catch (e) {
       setManualError('Failed to connect to server.');
@@ -172,13 +172,13 @@ const JoinCluster = () => {
 
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        // Set the clusterBackendUrl to the hostUrl
-        localStorage.setItem('clusterBackendUrl', hostUrl.trim());
+        // Set the stored host URL for this specific cluster
+        saveClusterHostUrl(cleanId, hostUrl.trim());
         console.log('Cluster backend URL saved:', hostUrl.trim());
         navigate(`/cluster?id=${cleanId}`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setInviteError(data.message || 'Failed to join cluster.');
+        setInviteError(data.error || data.message || 'Failed to join cluster.');
       }
     } catch (e) {
       setInviteError('Failed to connect to host server.');

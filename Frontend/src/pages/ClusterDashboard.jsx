@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getClusterAPI, getAiAPI, getLocalAPI, clearClusterSession } from '../config';
+import { getClusterAPI, getAiAPI, getLocalAPI, clearClusterSession, saveClusterHostUrl, hasFreshClusterHostUrl } from '../config';
+
+// How long we keep quietly auto-retrying the last-known host URL before we
+// give up and ask the user to paste a new one. A short blip (host machine
+// asleep for a minute, wifi hiccup, ngrok momentarily flaky) recovers on its
+// own within this window without ever bothering the user; a real tunnel
+// change (host restarted, got a new ngrok URL) won't, and falls through to
+// the manual banner once the window closes.
+const RECONNECT_GRACE_MS = 5 * 60 * 1000; // 5 minutes
+// After this many consecutive failed polls we start showing the (non-blocking)
+// "reconnecting…" indicator — short enough to give quick feedback, long enough
+// that one dropped request doesn't flash it.
+const QUIET_RETRY_THRESHOLD = 3;
 
 const API = getAiAPI();
 
@@ -90,8 +102,24 @@ const ClusterDashboard = () => {
   const [sessionEndResolver, setSessionEndResolver] = useState(null);
   const [isPostProcessing,   setIsPostProcessing]   = useState(false);
   const [clustersNavOpen,    setClustersNavOpen]    = useState(false);
+  // ── Session history (built client-side from `messages` — see project.md notes
+  // on backend persistence: the backend does NOT store prompt/answer text anywhere,
+  // only aggregate per-model win/loss/vote counters. This panel is only as durable
+  // as `messages`/sessionStorage — it's gone on Reset Session, a new tab, or another device.
+  const [historyOpen,         setHistoryOpen]         = useState(false);
+  const [historyExpanded,     setHistoryExpanded]     = useState({});
+  const [historyRespExpanded, setHistoryRespExpanded] = useState({});
+  // Durable history — fetched from /consensus/history, backed by consensus_log
+  // in the DB. Falls back to the client-side `messages` reconstruction below
+  // if the fetch fails (offline, host unreachable), so the panel still shows
+  // at least this session's data.
+  const [durableHistory,      setDurableHistory]      = useState(null); // null = not loaded yet
+  const [historyLoading,      setHistoryLoading]      = useState(false);
+  const [historyLoadError,    setHistoryLoadError]    = useState('');
   const failCount = useRef(0);
+  const firstFailAt = useRef(null);
   const [hostUnreachable, setHostUnreachable] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [reconnectUrl, setReconnectUrl] = useState('');
 
   // Keep clusterId in sync with the URL on every navigation — query-param-only
@@ -118,6 +146,77 @@ const ClusterDashboard = () => {
 
   const currentUserSystem = useMemo(() => systems.find(s => s.hostname === userEmail), [systems, userEmail]);
   const systemsLoaded = systems.length > 0;
+
+  // Pair each answered bot message with the user prompt that triggered it.
+  // `all_responses` (every model's answer + scores) already gets attached to
+  // the bot message in handleSendMessage — this just reshapes it for display.
+  // This is the client-side/session-only fallback, used only if the durable
+  // fetch below hasn't loaded yet or failed.
+  const clientHistoryEntries = useMemo(() => {
+    const entries = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role === 'bot' && !m.error && Array.isArray(m.all_responses)) {
+        let userMsg = null;
+        for (let j = i - 1; j >= 0; j--) {
+          if (messages[j].role === 'user') { userMsg = messages[j]; break; }
+        }
+        entries.push({
+          id: m.id,
+          prompt: userMsg?.content || '(prompt unavailable)',
+          time: m.time || userMsg?.timestamp || '',
+          winnerModel: m.model,
+          winnerScore: m.avg_score,
+          responses: [...m.all_responses].sort((a, b) => (b.avg_score || 0) - (a.avg_score || 0)),
+        });
+      }
+    }
+    return entries.reverse(); // most recent question first
+  }, [messages]);
+
+  // Durable entries — from consensus_log via the backend, survives Reset
+  // Session / new tabs / other devices. Preferred source whenever it's loaded.
+  const durableHistoryEntries = useMemo(() => {
+    if (!durableHistory) return null;
+    return durableHistory.map(log => ({
+      id: `log-${log.id}`,
+      prompt: log.prompt || '(prompt unavailable)',
+      time: log.createdAt ? new Date(log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      winnerModel: log.winnerModel,
+      winnerScore: (log.allResponses || []).find(r => r.model === log.winnerModel)?.avg_score,
+      responses: [...(log.allResponses || [])].sort((a, b) => (b.avg_score || 0) - (a.avg_score || 0)),
+    }));
+  }, [durableHistory]);
+
+  const historyEntries = durableHistoryEntries !== null ? durableHistoryEntries : clientHistoryEntries;
+
+  const fetchConsensusHistory = useCallback(async () => {
+    if (!clusterId) return;
+    setHistoryLoading(true); setHistoryLoadError('');
+    try {
+      const res = await fetch(`${getClusterAPI()}/api/v1/clusters/consensus/history?clusterId=${clusterId}&limit=200`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (!res.ok) {
+        let e = {};
+        try { e = await res.json(); } catch (_) {}
+        throw new Error(e.error || 'Failed to load history.');
+      }
+      const data = await res.json();
+      setDurableHistory(data);
+    } catch (e) {
+      // Leave durableHistory as-is (null or previous value) so the client-side
+      // fallback (this session's `messages`) still renders.
+      setHistoryLoadError(e.message || 'Could not reach the server.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [clusterId]);
+
+  useEffect(() => { if (historyOpen) fetchConsensusHistory(); }, [historyOpen, fetchConsensusHistory]);
+
+  const toggleHistoryEntry = (id) => setHistoryExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  const toggleHistoryAnswer = (key) => setHistoryRespExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
   const isHost = useMemo(() => {
     if (cluster && userId && parseInt(cluster.hostId) === parseInt(userId)) return true;
@@ -211,8 +310,13 @@ const ClusterDashboard = () => {
         console.log("Cluster data from backend:", data);
         setCluster(data);
         sessionStorage.setItem('clusterId', data.id);
+        // Connection is good — reset the failure streak and refresh this
+        // cluster's stored host URL so it doesn't go stale while in active use.
         failCount.current = 0;
+        firstFailAt.current = null;
         setHostUnreachable(false);
+        setReconnecting(false);
+        saveClusterHostUrl(cId, getClusterAPI(cId));
         
         // Don't hard-redirect based on hostId alone — isHost is resolved from
         // the membership table via the systems fetch below. Let the worker banner
@@ -242,7 +346,22 @@ const ClusterDashboard = () => {
     } catch (err) {
       console.error(err);
       failCount.current++;
-      if (failCount.current >= 3) setHostUnreachable(true);
+      if (failCount.current === 1) firstFailAt.current = Date.now();
+
+      if (failCount.current >= QUIET_RETRY_THRESHOLD) {
+        // Nothing fresh to even auto-retry against (never stored, or the
+        // cached URL already expired) — no point stalling, ask right away.
+        const cId2 = clusterId;
+        const hasFreshUrl = cId2 && hasFreshClusterHostUrl(cId2);
+        const graceExpired = firstFailAt.current && (Date.now() - firstFailAt.current > RECONNECT_GRACE_MS);
+
+        if (!hasFreshUrl || graceExpired) {
+          setReconnecting(false);
+          setHostUnreachable(true);
+        } else {
+          setReconnecting(true);
+        }
+      }
     }
   }, [navigate, userId, clusterId]);
 
@@ -299,7 +418,12 @@ const ClusterDashboard = () => {
       if (selectedSystemForModels && selectedSystemForModels.id !== currentUserSystem?.id)
         url = `${getClusterAPI()}/api/v1/clusters/proxy/models/scan?clusterId=${clusterId}&targetId=${selectedSystemForModels.id}`;
       const res = await fetch(url, { headers: selectedSystemForModels ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {} });
-      if (!res.ok) { let e = { message: 'Scan failed' }; try { e = await res.json(); } catch (_) {} setScanError(e.detail || e.message || 'Scan failed.'); return; }
+      if (!res.ok) {
+        let e = {};
+        try { e = await res.json(); } catch (_) {}
+        setScanError(e.error || e.detail || e.message || 'Scan failed.');
+        return;
+      }
       const data = await res.json();
       setAvailableModels(data);
       if (data.length === 0) setScanError('No model files found in the models folder.');
@@ -350,7 +474,17 @@ const ClusterDashboard = () => {
         return;
       }
       
-      if (!res.ok) { let e = { message: 'Load failed' }; try { e = await res.json(); } catch (_) {} throw new Error(e.message || 'Load failed.'); }
+      if (!res.ok) {
+        let e = {};
+        try { e = await res.json(); } catch (_) {}
+        // Backend (ClusterController) returns errors as {"error": "..."}, while
+        // ai-service (FastAPI, hit directly for local scans) uses {"detail": "..."}.
+        // This previously only checked e.message, which neither of those sets, so
+        // every load failure silently collapsed to the generic 'Load failed.' text
+        // below regardless of the real reason (capacity reached, permission paused,
+        // model file not found, communication error, etc).
+        throw new Error(e.error || e.message || e.detail || 'Load failed.');
+      }
       const result = await res.json();
       const gpuLayers = result?.gpu_layers ?? 0;
       setScanError(`✓ ${model.name} loaded (${gpuLayers > 0 ? gpuLayers + ' GPU layers' : 'CPU mode'})`);
@@ -370,7 +504,11 @@ const ClusterDashboard = () => {
       const res = await fetch(`${getClusterAPI()}/api/v1/clusters/proxy/models/unload?clusterId=${clusterId}&targetId=${targetId}&name=${encodeURIComponent(name)}`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      if (!res.ok) { let e = { message: 'Unload failed' }; try { e = await res.json(); } catch (_) {} throw new Error(e.message); }
+      if (!res.ok) {
+        let e = {};
+        try { e = await res.json(); } catch (_) {}
+        throw new Error(e.error || e.message || e.detail || 'Unload failed.');
+      }
       await fetchActiveModels();
       setAvailableModels(prev => prev.map(m => m.name === name ? { ...m, loaded: false } : m));
     } catch (e) { console.error('Unload error:', e); setScanError(e.message); }
@@ -418,9 +556,15 @@ const ClusterDashboard = () => {
   useEffect(() => {
     if (!sessionEndModal) return;
     if (sessionEndCountdown <= 0) {
-      // Auto-proceed after countdown
+      // Auto-proceed after countdown — must actually (re)send the pending
+      // prompt, same as the "Continue" button does. Previously this only
+      // resolved the checkSessionEnd() promise and closed the modal, which
+      // made handleSendMessage's `if (result !== null) return;` guard bail
+      // out silently: the resolved value here is `false` (not null), so the
+      // message was dropped with no request ever sent and no error shown.
       setSessionEndModal(false);
       if (sessionEndResolver) sessionEndResolver(false); // false = don't skip
+      handleSendMessage(false);
       return;
     }
     const t = setTimeout(() => setSessionEndCountdown(c => c - 1), 1000);
@@ -675,10 +819,10 @@ const ClusterDashboard = () => {
         .cd-main { display:grid; grid-template-columns:300px 1fr; flex:1; overflow:hidden; min-height:0; }
 
         /* Model panel */
-        .cd-model-panel { border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
+        .cd-model-panel { border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; min-height:0; }
         .cd-panel-header { padding:11px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; gap:8px; }
         .cd-panel-title { font-size:9px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-dim); font-family:var(--font-mono); }
-        .cd-model-list { overflow-y:auto; flex:1; }
+        .cd-model-list { overflow-y:auto; flex:1; min-height:0; }
 
         /* Model card */
         .cd-model-card { padding:13px 16px; border-bottom:1px solid var(--border); cursor:pointer; transition:background var(--transition); position:relative; }
@@ -722,7 +866,11 @@ const ClusterDashboard = () => {
         .cd-view-toggle { display:flex; gap:3px; }
         .cd-view-btn { padding:4px 10px; border-radius:var(--radius-sm); font-size:11px; border:1px solid var(--border); background:transparent; color:var(--text-dim); cursor:pointer; font-family:var(--font-mono); transition:all var(--transition); }
         .cd-view-btn.active { background:var(--bg4); border-color:var(--border-bright); color:var(--text); }
-        .cd-arena-body { flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:10px; }
+        /* min-height:0 is required here — without it, a flex child with flex:1 refuses to
+           shrink below its content size, so long answers just get clipped by the parent's
+           overflow:hidden instead of scrolling internally. This was the actual cause of
+           "page can't scroll" on long model answers. */
+        .cd-arena-body { flex:1; min-height:0; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:10px; }
 
         /* Response cards */
         .cd-rcard { border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg2); overflow:hidden; transition:border-color var(--transition); animation:slideInUp .18s ease forwards; }
@@ -739,15 +887,18 @@ const ClusterDashboard = () => {
         .cd-rcard.expanded .cd-expand-icon { transform:rotate(180deg); }
         .cd-rcard-preview { padding:8px 14px; font-size:12px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-style:italic; }
         .cd-rcard.expanded .cd-rcard-preview { display:none; }
-        .cd-rcard-body { padding:14px; font-size:13px; line-height:1.7; color:var(--text-mid); display:none; max-height:420px; overflow-y:auto; }
+        .cd-rcard-body { padding:14px; font-size:13px; line-height:1.7; color:var(--text-mid); display:none; }
         .cd-rcard.expanded .cd-rcard-body { display:block; }
+        /* Long answers flow naturally in the single outer scroll (.cd-arena-body) instead of
+           being trapped in their own small nested scrollbox — that nested-scroll trap was the
+           cause of "can't scroll / looks odd" on long model answers. */
         .cd-vote-chip { width:18px; height:18px; border-radius:3px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; border:1px solid; }
 
         /* Discussion panel */
-        .cd-disc { display:flex; flex-direction:column; overflow:hidden; border-left:1px solid var(--border); }
+        .cd-disc { display:flex; flex-direction:column; overflow:hidden; border-left:1px solid var(--border); min-height:0; }
         .cd-disc-header { padding:12px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; background:var(--bg2); }
         .cd-disc-title { font-size:9px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-dim); font-family:var(--font-mono); }
-        .cd-disc-body { flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+        .cd-disc-body { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
         .cd-disc-msg { display:flex; gap:9px; }
         .cd-disc-dot { width:5px; height:5px; border-radius:50%; flex-shrink:0; margin-top:5px; }
         .cd-disc-name { font-size:11px; font-weight:600; }
@@ -767,7 +918,7 @@ const ClusterDashboard = () => {
         .cd-drawer-sum-item { padding:10px 13px; border-right:1px solid var(--border); }
         .cd-drawer-sum-item label { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.09em; color:var(--text-dim); font-family:var(--font-mono); margin-bottom:3px; }
         .cd-drawer-sum-item value { font-family:var(--font-mono); font-size:15px; font-weight:600; }
-        .cd-drawer-body { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:9px; }
+        .cd-drawer-body { flex:1; min-height:0; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:9px; }
         .cd-snode { background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; transition:border-color var(--transition); cursor:pointer; }
         .cd-snode:hover { border-color:var(--border-bright); }
         .cd-snode.host { border-color:var(--accent-border); }
@@ -786,7 +937,7 @@ const ClusterDashboard = () => {
         .cd-modal-head { padding:17px 22px 14px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-shrink:0; }
         .cd-modal-title { font-size:14px; font-weight:600; margin-bottom:3px; }
         .cd-modal-sub { font-size:11px; color:var(--text-mid); line-height:1.5; }
-        .cd-modal-body { flex:1; overflow-y:auto; }
+        .cd-modal-body { flex:1; min-height:0; overflow-y:auto; }
         .cd-modal-foot { padding:11px 22px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:var(--bg3); flex-shrink:0; }
         .cd-mm-row { display:flex; align-items:center; gap:13px; padding:12px 22px; border-bottom:1px solid var(--border); transition:background var(--transition); }
         .cd-mm-row:hover { background:var(--bg3); }
@@ -799,6 +950,23 @@ const ClusterDashboard = () => {
         /* Invite fields */
         .cd-invite-field { display:flex; gap:8px; align-items:center; background:var(--bg3); border:1px solid var(--border-bright); border-radius:var(--radius-md); padding:9px 12px; }
         .cd-invite-val { flex:1; font-family:var(--font-mono); font-size:11px; color:var(--text-mid); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+        /* Session history modal */
+        .cd-modal-history { width:760px; }
+        .cd-hist-entry { border-bottom:1px solid var(--border); }
+        .cd-hist-q { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 22px; cursor:pointer; transition:background var(--transition); }
+        .cd-hist-q:hover { background:var(--bg3); }
+        .cd-hist-q-left { display:flex; align-items:center; gap:11px; min-width:0; flex:1; }
+        .cd-hist-q-idx { font-family:var(--font-mono); font-size:10px; color:var(--accent); background:var(--accent-dim); border:1px solid var(--accent-border); padding:2px 7px; border-radius:var(--radius-sm); flex-shrink:0; }
+        .cd-hist-q-text { font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .cd-hist-q-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+        .cd-hist-q-time { font-family:var(--font-mono); font-size:10px; color:var(--text-dim); }
+        .cd-hist-answers { padding:0 22px 14px; display:flex; flex-direction:column; gap:7px; }
+        .cd-hist-ans { border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg2); overflow:hidden; }
+        .cd-hist-ans.winner { border-color:var(--accent-border); }
+        .cd-hist-ans-head { display:flex; align-items:center; justify-content:space-between; padding:9px 12px; cursor:pointer; transition:background var(--transition); }
+        .cd-hist-ans-head:hover { background:var(--bg3); }
+        .cd-hist-ans-body { padding:0 12px 12px; font-size:12px; line-height:1.65; color:var(--text-mid); border-top:1px solid var(--border); padding-top:10px; margin-top:-2px; }
       `}</style>
 
       {/* ── NAV ── */}
@@ -893,6 +1061,10 @@ const ClusterDashboard = () => {
           <button className={`cd-bar-btn ${drawerOpen ? 'active' : ''}`} onClick={() => setDrawerOpen(true)}>
             <svg viewBox="0 0 14 14" fill="none" style={{ width:13, height:13 }}><rect x="1" y="2" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3"/><rect x="1" y="8" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3"/></svg>
             Systems
+          </button>
+          <button className={`cd-bar-btn ${historyOpen ? 'active' : ''}`} onClick={() => setHistoryOpen(true)}>
+            <svg viewBox="0 0 14 14" fill="none" style={{ width:13, height:13 }}><circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M7 4v3l2.2 1.3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            History{historyEntries.length > 0 ? ` (${historyEntries.length})` : ''}
           </button>
           <div className="cd-settings-wrap">
             <button className="cd-bar-btn" onClick={toggleSettings}>
@@ -1413,6 +1585,101 @@ const ClusterDashboard = () => {
           <div className="cd-modal-foot">
             <span style={{ fontSize:11, color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>Read-only · Updated during discussion rounds</span>
             <button className="btn btn-ghost btn-sm" onClick={() => setNotesModalOpen(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── SESSION HISTORY MODAL ── */}
+      <div className={`cd-overlay ${historyOpen ? 'open' : ''}`} onClick={e => e.target.classList.contains('cd-overlay') && setHistoryOpen(false)}>
+        <div className="cd-modal cd-modal-history">
+          <div className="cd-modal-head">
+            <div>
+              <div className="cd-modal-title">History</div>
+              <div className="cd-modal-sub">
+                {durableHistoryEntries !== null
+                  ? "Every prompt asked in this cluster, each model's answer, its score, and the individual votes it received. Synced from the server — persists across sessions and devices."
+                  : historyLoading
+                    ? 'Loading history from the server…'
+                    : historyLoadError
+                      ? `Couldn't load full history (${historyLoadError}) — showing this session only.`
+                      : "Every prompt sent this session, each model's answer, its score, and the individual votes it received."}
+              </div>
+            </div>
+            <button className="nd-modal-close" onClick={() => setHistoryOpen(false)}>×</button>
+          </div>
+
+          <div className="cd-modal-body">
+            {historyEntries.length === 0 ? (
+              <div className="nd-empty" style={{ padding:'40px 16px' }}>
+                <div className="nd-empty-icon">🕘</div>
+                <div className="nd-empty-sub">No questions asked yet this session.</div>
+              </div>
+            ) : historyEntries.map((entry, qi) => {
+              const isEntryOpen = !!historyExpanded[entry.id];
+              return (
+                <div key={entry.id} className="cd-hist-entry">
+                  <div className="cd-hist-q" onClick={() => toggleHistoryEntry(entry.id)}>
+                    <div className="cd-hist-q-left">
+                      <span className="cd-hist-q-idx">Q{historyEntries.length - qi}</span>
+                      <span className="cd-hist-q-text">{entry.prompt}</span>
+                    </div>
+                    <div className="cd-hist-q-right">
+                      <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-dim)' }}>{entry.responses.length} model{entry.responses.length !== 1 ? 's' : ''}</span>
+                      <span className="cd-hist-q-time">{entry.time}</span>
+                      <svg className="cd-expand-icon" style={{ transform: isEntryOpen ? 'rotate(180deg)' : 'none' }} viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </div>
+                  </div>
+
+                  {isEntryOpen && (
+                    <div className="cd-hist-answers">
+                      {entry.responses.map((r, ri) => {
+                        const m = models.find(mo => mo.name === r.model);
+                        const isWinner = r.model === entry.winnerModel;
+                        const key = `${entry.id}-${ri}`;
+                        const isAnsOpen = !!historyRespExpanded[key];
+                        return (
+                          <div key={key} className={`cd-hist-ans ${isWinner ? 'winner' : ''}`}>
+                            <div className="cd-hist-ans-head" onClick={() => toggleHistoryAnswer(key)}>
+                              <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+                                <div className="cd-model-dot" style={{ background: m?.color || colorFromName(r.model), flexShrink:0 }} />
+                                <span style={{ fontSize:12, fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.model}</span>
+                                {isWinner && <span className="winner-tag">✦ Best</span>}
+                              </div>
+                              <div style={{ display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
+                                <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--text-dim)' }}>{(r.avg_score || 0).toFixed(1)}/5 · {r.scores?.length || 0} votes</span>
+                                <svg className="cd-expand-icon" style={{ transform: isAnsOpen ? 'rotate(180deg)' : 'none' }} viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              </div>
+                            </div>
+                            {isAnsOpen && (
+                              <div className="cd-hist-ans-body">
+                                <div style={{ whiteSpace:'pre-wrap', marginBottom:10 }}>{r.answer}</div>
+                                <div className="label-caps" style={{ marginBottom:6 }}>Votes received</div>
+                                <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                                  {(r.scores || []).map((s, i) => (
+                                    <div key={i} className="cd-vote-chip" style={{
+                                      background: s >= 4 ? 'var(--accent-dim)' : s <= 2 ? 'var(--red-dim)' : 'var(--bg4)',
+                                      color: s >= 4 ? 'var(--accent)' : s <= 2 ? 'var(--red)' : 'var(--text-mid)',
+                                      borderColor: s >= 4 ? 'var(--accent-border)' : s <= 2 ? 'rgba(239,68,68,.25)' : 'var(--border)',
+                                    }}>{s}</div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="cd-modal-foot">
+            <span style={{ fontSize:11, color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
+              {historyEntries.length} question{historyEntries.length !== 1 ? 's' : ''} this session
+            </span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setHistoryOpen(false)}>Close</button>
           </div>
         </div>
       </div>

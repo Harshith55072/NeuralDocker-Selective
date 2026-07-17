@@ -1,29 +1,16 @@
-import React from 'react';
-
-const ApiCodeTabs = () => {
-  return (
-    <div className="api-section">
-      <div className="api-section-body">
-        <h3 style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: '16px' }}>Request Samples</h3>
-        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', borderBottom: '1px solid var(--border)' }}>
-          <button style={{ background: 'none', border: 'none', color: 'var(--cyan)', borderBottom: '2px solid var(--cyan)', padding: '8px 4px', fontSize: '12px', cursor: 'pointer' }}>cURL</button>
-          <button style={{ background: 'none', border: 'none', color: 'var(--text-mid)', padding: '8px 4px', fontSize: '12px', cursor: 'pointer' }}>Python</button>
-          <button style={{ background: 'none', border: 'none', color: 'var(--text-mid)', padding: '8px 4px', fontSize: '12px', cursor: 'pointer' }}>JavaScript</button>
-        </div>
-        <div className="api-code">
-          <pre style={{ margin: 0 }}><code className="api-url">
-{`curl -X POST "https://api.neuraldocker.com/v1/generate" \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "prompt": "Hello world",
-    "model": "llama-3-8b"
-  }'`}
-          </code></pre>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default ApiCodeTabs;
+// DEPRECATED — DO NOT USE OR IMPORT.
+//
+// Early scaffold for a componentized ModelAPI page. Not imported anywhere
+// (confirmed via grep) and non-functional even if it were: static hardcoded
+// example URL, no props, tab buttons with no onClick handlers.
+//
+// `Frontend/src/pages/ModelAPI.jsx` is the real, working, fully self-contained
+// implementation of this page (code tabs, live test, sidebar, schema, all in
+// one file) and is what's actually wired into the router.
+//
+// This file is left as an emptied stub because the available MCP tools can
+// write/edit files but cannot delete them. Please `git rm
+// Frontend/src/components/api/ApiCodeTabs.jsx` (and the sibling stub files:
+// ApiLiveTest.jsx, ApiModelCard.jsx, ApiNavbar.jsx, ApiResponseSchema.jsx,
+// ApiSidebar.jsx — and the now-empty `components/api/` dir if nothing else
+// lives there) next time you're in a position to run git commands.

@@ -310,6 +310,7 @@ export default function Pipeline() {
     const collected = { ...seedAnswers };
     let errs = errorCount;
     const clusterId = endpointData.clusterId;
+    let lastProcessedIndex = startIndex - 1; // tracks the last question actually attempted, for accurate checkpointing on early stop
 
     for (let i = startIndex; i < activeQs.length; i++) {
       if (abortRef.current) { addLog('warn', 'Pipeline stopped by user.'); break; }
@@ -361,6 +362,8 @@ export default function Pipeline() {
         addLog('error', `${q.qid} failed: ${msg}`, q.qid);
       }
 
+      lastProcessedIndex = i; // this question was attempted (success or error) — safe to resume after it
+
       // Smarter delay — only wait the remainder of MIN_QUESTION_GAP_MS, never a fixed full sleep
       const elapsedThisQ = Date.now() - questionStart;
       const remaining = MIN_QUESTION_GAP_MS - elapsedThisQ;
@@ -369,8 +372,12 @@ export default function Pipeline() {
       }
     }
 
-    // Final checkpoint
-    await checkpointBackend(id, collected, activeQs.length - 1, abortRef.current ? 'STOPPED' : 'DONE', errs);
+    // Final checkpoint — use the last question actually attempted, not the file's
+    // full length. Previously this always wrote `activeQs.length - 1`, which on an
+    // early Stop marked the run as if every question had been processed. On
+    // reconnect, startIndex = checkpointIndex + 1 would equal activeQs.length,
+    // so the resume loop silently skipped all the never-answered questions.
+    await checkpointBackend(id, collected, lastProcessedIndex, abortRef.current ? 'STOPPED' : 'DONE', errs);
 
     const md = buildOutputMd(activeQs, collected, fileName.replace('.md', ''), outputMode, endpointData?.clusterName);
     setOutputMd(md);

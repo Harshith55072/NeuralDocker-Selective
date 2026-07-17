@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getClusterAPI, getLocalAPI, getAiAPI } from '../config';
 
 // ── GraphRenderer ─────────────────────────────────────────────────────────────
 class GraphRenderer {
@@ -278,7 +279,7 @@ const Dashboard = () => {
         }
       } catch { setLastUpdate('Connection Error'); }
 
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+      const apiUrl = getClusterAPI();
       try {
         const t = localStorage.getItem('token');
         const res = await fetch(`${apiUrl}/api/v1/clusters/my-cluster`, { headers: { Authorization: `Bearer ${t}` } });
@@ -335,7 +336,7 @@ const Dashboard = () => {
   const fetchRecordings = useCallback(async () => {
     setRecordingsLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/recordings/list');
+      const res = await fetch(`${getAiAPI()}/api/recordings/list`);
       const data = await res.json();
       setRecordings(Array.isArray(data) ? data : []);
     } catch { setRecordings([]); } finally { setRecordingsLoading(false); }
@@ -344,12 +345,13 @@ const Dashboard = () => {
   useEffect(() => { if (sidebarTab === 'recordings') fetchRecordings(); }, [sidebarTab, fetchRecordings]);
 
   const openRecording = async (filename, folder) => {
+    const aiApi = getAiAPI();
     const normFolder = (!folder || folder === '.' || folder === 'root') ? '' : folder;
-    const url = normFolder ? `http://localhost:8000/api/recordings/view/${encodeURIComponent(filename)}?folder=${encodeURIComponent(normFolder)}` : `http://localhost:8000/api/recordings/view/${encodeURIComponent(filename)}`;
+    const url = normFolder ? `${aiApi}/api/recordings/view/${encodeURIComponent(filename)}?folder=${encodeURIComponent(normFolder)}` : `${aiApi}/api/recordings/view/${encodeURIComponent(filename)}`;
     try {
       const res = await fetch(url);
       if (res.ok) { const data = await res.json(); if (data?.samples) { setViewerData({ data }); setViewerOpen(true); return; } }
-      const fallback = await fetch(`http://localhost:8000/api/recordings/view/${encodeURIComponent(filename)}`);
+      const fallback = await fetch(`${aiApi}/api/recordings/view/${encodeURIComponent(filename)}`);
       if (fallback.ok) { const data = await fallback.json(); if (data?.samples) { setViewerData({ data }); setViewerOpen(true); return; } }
       alert('Recording not found.');
     } catch { alert('Failed to load recording.'); }
@@ -357,8 +359,9 @@ const Dashboard = () => {
 
   const deleteRecording = async (filename, folder) => {
     if (!window.confirm(`Delete "${filename}"?`)) return;
+    const aiApi = getAiAPI();
     const normFolder = (!folder || folder === '.' || folder === 'root') ? '' : folder;
-    const url = normFolder ? `http://localhost:8000/api/recordings/delete/${encodeURIComponent(filename)}?folder=${encodeURIComponent(normFolder)}` : `http://localhost:8000/api/recordings/delete/${encodeURIComponent(filename)}`;
+    const url = normFolder ? `${aiApi}/api/recordings/delete/${encodeURIComponent(filename)}?folder=${encodeURIComponent(normFolder)}` : `${aiApi}/api/recordings/delete/${encodeURIComponent(filename)}`;
     try { await fetch(url, { method: 'DELETE' }); setViewerOpen(false); setViewerData(null); fetchRecordings(); } catch { alert('Delete failed.'); }
   };
 
@@ -366,21 +369,21 @@ const Dashboard = () => {
     const normFrom = (!fromFolder || fromFolder === '.' || fromFolder === 'root') ? '' : fromFolder;
     const normTo = (!toFolder || toFolder === 'root') ? '' : toFolder;
     try {
-      const res = await fetch('http://localhost:8000/api/recordings/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, from_folder: normFrom, to_folder: normTo }) });
+      const res = await fetch(`${getAiAPI()}/api/recordings/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, from_folder: normFrom, to_folder: normTo }) });
       if (!res.ok) alert('Move failed.');
       fetchRecordings();
     } catch { alert('Move failed.'); }
   };
 
   const createFolder = async (name) => {
-    try { await fetch('http://localhost:8000/api/recordings/create-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: name }) }); fetchRecordings(); } catch {}
+    try { await fetch(`${getAiAPI()}/api/recordings/create-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: name }) }); fetchRecordings(); } catch {}
   };
 
   const createCluster = async () => {
     if (!newClusterName.trim()) return;
     try {
       const token = localStorage.getItem('token');
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+      const apiUrl = getLocalAPI(); // creating a cluster always targets this machine's own backend, not any joined cluster
       const res = await fetch(`${apiUrl}/api/v1/clusters/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -405,7 +408,7 @@ const Dashboard = () => {
         navigate(`/cluster?id=${c.id}`);
       } else {
         const d = await res.json().catch(() => ({}));
-        alert(d.message || 'Failed to create cluster.');
+        alert(d.error || d.message || 'Failed to create cluster.');
       }
     } catch { alert('Error connecting to backend.'); }
   };

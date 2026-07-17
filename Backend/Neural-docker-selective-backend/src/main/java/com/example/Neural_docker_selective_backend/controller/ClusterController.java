@@ -160,6 +160,7 @@ public class ClusterController {
                     temperature,
                     (String) payload.get("scoringMode"),
                     (Boolean) payload.get("autoQueue"),
+                    (Boolean) payload.get("sessionHistory"),
                     (Boolean) payload.get("enableDiscussion"),
                     (Boolean) payload.get("anonymousDiscussion"),
                     (String) payload.get("discussionBasePrompt")));
@@ -580,6 +581,20 @@ public class ClusterController {
             Authentication authentication) {
         try {
             return ResponseEntity.ok(consensusService.getModelNotes(authentication.getName(), clusterId));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ── Durable consensus history — backs the History panel across sessions/devices ──
+    @GetMapping("/consensus/history")
+    public ResponseEntity<?> getConsensusHistory(
+            @RequestParam Integer clusterId,
+            @RequestParam(required = false, defaultValue = "100") Integer limit,
+            Authentication authentication) {
+        try {
+            return ResponseEntity.ok(
+                    consensusService.getConsensusHistory(authentication.getName(), clusterId, limit));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

@@ -33,7 +33,7 @@ const CreateCluster = () => {
         navigate(`/cluster?id=${data.id}`);
       } else {
         const errorData = await response.json().catch(() => ({}));
-        setError(errorData.message || 'Failed to create cluster');
+        setError(errorData.error || errorData.message || 'Failed to create cluster');
       }
     } catch (err) {
       setError('Failed to connect to the server.');
