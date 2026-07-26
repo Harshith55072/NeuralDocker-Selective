@@ -150,12 +150,14 @@ mkdir -p models
 
 ### 3. Set up your `.env` file
 
-Create a `.env` file in the project root with your ngrok token (skip this if you don't need cross-network clusters yet — you can add it later):
-
 ```bash
-NGROK_AUTHTOKEN=your_token_here
+cp .env.example .env
 ```
-Get a free token at `https://dashboard.ngrok.com/get-started/your-authtoken`.
+Then open `.env` and fill in `NGROK_AUTHTOKEN` (skip this if you don't need cross-network clusters yet — you can add it later; without it, the `ngrok`/`ngrok-monitor` containers will just idle instead of doing anything). Get a free token at `https://dashboard.ngrok.com/get-started/your-authtoken`.
+
+`SERVICE_TOKEN` and `JWT_SECRET` already have safe defaults in `.env.example` for local/single-machine use — you don't need to touch them unless you're deploying somewhere shared.
+
+**This file is yours to keep.** It's gitignored (never committed, never touched by `git pull`), and re-running `setup.sh` below only adds/updates its own `CUDA_*` lines — your token and secrets are left alone.
 
 ### 4. Hardware Setup
 
@@ -167,7 +169,7 @@ This is the part that changes depending on your machine. **If you're not sure, j
 | 🎯 **NVIDIA GPU, different CUDA version** | Run `./setup.sh`, pick option 1, then select your CUDA version |
 | ⚪ **No GPU / AMD GPU** | Run `./setup.sh`, pick option 2 or 3 (both currently run CPU-only) |
 
-`setup.sh` never runs Docker for you — it just asks a couple of questions, writes a `.env` entry, and prints the exact command to run next. Nothing is installed or changed until you run that command yourself.
+`setup.sh` never runs Docker for you — it just asks a couple of questions, writes a `.env` entry, and prints the exact command to run next. Nothing is installed or changed until you run that command yourself. It's also safe to re-run any time (e.g. switching hardware later) — it only adds/updates its own `CUDA_*` lines in `.env` and won't touch your ngrok token or anything else already in there.
 
 Run it with:
 ```bash
@@ -221,6 +223,20 @@ docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build
 
 ---
 
+## Updating to a New Version
+
+```bash
+git pull
+docker compose up --build       # or the -f ... -f ... variant matching your hardware
+```
+
+- Your `.env` is never touched by `git pull` (it's gitignored) and, as of this version, never overwritten by `setup.sh` either — your ngrok token and secrets carry over automatically. You do **not** need to re-enter them.
+- `--build` is what picks up code changes — a plain `docker compose up` will just restart the old images.
+- The `postgres_data` volume persists across updates, so your accounts/clusters/models survive a rebuild. If you ever do want a clean slate: `docker compose down -v` (this deletes the database volume — recordings and models on disk are separate and unaffected).
+- If a fresh dependency install is misbehaving (stale layer cache), add `--no-cache` to the build.
+
+---
+
 ## Project Structure
 
 ```
@@ -255,7 +271,8 @@ NeuralDocker Selective/
 ├── docker-compose.yml           # Default — pinned NVIDIA dev config (unchanged)
 ├── docker-compose.cpu.yml       # Override — CPU-only / AMD
 ├── docker-compose.nvidia.yml    # Override — custom NVIDIA CUDA version
-└── setup.sh                     # Interactive hardware setup wizard
+├── setup.sh                     # Interactive hardware setup wizard (preserves existing .env)
+└── .env.example                 # Copy to .env and fill in — see step 3 above
 ```
 
 ---
@@ -307,6 +324,7 @@ All major behaviors are configurable per cluster:
 - **Single GPU per node** — multi-GPU support not implemented
 - **AMD GPUs run CPU-only for now** — ROCm/HIP acceleration is planned but not yet implemented
 - **Free ngrok** — tunnel URLs change on restart, monitor re-registers automatically
+- **No `NGROK_AUTHTOKEN` set** — the `ngrok`/`ngrok-monitor` containers will sit there idling/retrying rather than doing anything useful. Harmless for single-machine use, just ignore those two containers until you add a token
 - **GGUF only** — other model formats (.pt, .safetensors) detected but not guaranteed to work
 - **Non-default NVIDIA CUDA versions are untested** — only CUDA 12.4 / cu122 is validated; other versions use published llama-cpp-python wheels and should work, but haven't been confirmed on this project
 - **Experimental discussion** — post-session model discussion uses CPU inference to avoid CUDA state issues after heavy GPU use
@@ -314,6 +332,9 @@ All major behaviors are configurable per cluster:
 ---
 
 ## Current Status
+
+**Fresh-install verified: July 26, 2026.** All three paths (default pinned NVIDIA, `docker-compose.nvidia.yml` override, `docker-compose.cpu.yml`) were build-tested from a simulated clean clone, and the default path was run end-to-end (`docker compose up --build` → all 8 containers healthy → frontend/backend/ai-service/system-monitor all responding → ngrok tunnels registering). If you hit an install problem after this date, it's likely a real regression worth flagging, not a "just try again" situation — please open an issue with the failing step. Non-default NVIDIA CUDA versions (anything other than 12.4/cu122) are still unverified — see Known Limitations.
+
 
 | Feature | Status |
 |---|---|

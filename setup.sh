@@ -1,10 +1,27 @@
 #!/usr/bin/env bash
 set -e
 
+# Upsert KEY=VALUE into .env without touching any other line.
+# Creates .env if it doesn't exist yet. Safe to call repeatedly.
+set_env_var() {
+  local key="$1" value="$2" file=".env"
+  touch "$file"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    grep -v "^${key}=" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  fi
+  echo "${key}=${value}" >> "$file"
+}
+
 echo "=================================================="
 echo " NeuralDocker Selective — Setup"
 echo "=================================================="
 echo ""
+if [ -f .env ]; then
+  echo "(Existing .env found — this will only add/update the CUDA_* lines"
+  echo " below. NGROK_AUTHTOKEN, JWT_SECRET, SERVICE_TOKEN, and anything"
+  echo " else you already have in there are left untouched.)"
+  echo ""
+fi
 echo "1) NVIDIA GPU"
 echo "2) AMD GPU"
 echo "3) No GPU / CPU only"
@@ -35,12 +52,11 @@ case "$choice" in
       5) BASE_IMAGE="nvidia/cuda:11.8.0-runtime-ubuntu22.04";       WHEEL_TAG="cu118" ;;
       *) echo "Invalid choice"; exit 1 ;;
     esac
-    cat > .env <<EOF
-CUDA_BASE_IMAGE=${BASE_IMAGE}
-CUDA_WHEEL_TAG=${WHEEL_TAG}
-EOF
+    set_env_var "CUDA_BASE_IMAGE" "${BASE_IMAGE}"
+    set_env_var "CUDA_WHEEL_TAG" "${WHEEL_TAG}"
     echo ""
-    echo "Config written to .env"
+    echo "CUDA_BASE_IMAGE / CUDA_WHEEL_TAG written to .env (everything else in"
+    echo "that file, including your ngrok token, was left as-is)."
     echo "NOTE: only CUDA 12.4 / cu122 (option 1) is validated against this project."
     echo "Other versions use prebuilt wheels published by the llama-cpp-python"
     echo "project for the same pinned version — they should work, but haven't been"

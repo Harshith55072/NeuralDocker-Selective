@@ -35,7 +35,10 @@ services:
       # Service token for internal services (ngrok monitor)
       # Change this in production — must match SERVICE_TOKEN in ngrok_monitor.py
       SERVICE_TOKEN: ${SERVICE_TOKEN:-nd-service-token-change-me-in-production}
-      JWT_SECRET: ${JWT_SECRET}
+      # Falls back to the same literal as application.properties if unset/blank —
+      # keeps a bare `docker compose up` (no .env at all) working for local/single-
+      # machine use. Set a real secret in .env before any shared deployment.
+      JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
     restart: unless-stopped
 
   pgadmin:
@@ -97,16 +100,18 @@ services:
   frontend:
     build:
       context: ./Frontend
+      # These are build ARGs, not runtime env vars — Vite bakes them into the
+      # JS bundle during `npm run build`, which happens in an earlier stage
+      # that never sees this service's `environment:`. If you change these,
+      # rebuild the frontend container (`--build`, not just `up`).
+      args:
+        VITE_API_URL: http://localhost:8081
+        VITE_AI_API_URL: http://localhost:8000
     container_name: neural_frontend
     ports:
       - "3000:80"
     depends_on:
       - backend
-    environment:
-      # These are build-time env vars — Vite bakes them into the JS bundle
-      # If you change these, rebuild the frontend container
-      - VITE_API_URL=http://localhost:8081
-      - VITE_AI_API_URL=http://localhost:8000
 
   ngrok:
     image: ngrok/ngrok:latest
