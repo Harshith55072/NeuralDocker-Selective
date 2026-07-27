@@ -40,6 +40,23 @@ public class SecurityConfiguration {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .exceptionHandling(ex -> ex
+                // Default (no entry point configured) is Http403ForbiddenEntryPoint,
+                // which returns the exact same 403 as a genuine access-denied case
+                // (e.g. a non-host hitting a host-only endpoint). That makes it
+                // impossible for the frontend to tell "you're not logged in / your
+                // token is expired or invalid" apart from "you're logged in but not
+                // allowed to do this." Returning 401 here instead keeps that
+                // distinction available: 401 = not authenticated at all (missing/
+                // expired/malformed JWT), 403 = authenticated but forbidden. The
+                // frontend uses this to auto-clear a stale token and redirect to
+                // /login on 401, without touching legitimate 403s.
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\": \"Authentication required or token invalid/expired.\"}");
+                })
+            )
             .authorizeHttpRequests(auth -> auth
                 // Public auth endpoints — no token needed
                 .requestMatchers("/api/v1/auth/**").permitAll()

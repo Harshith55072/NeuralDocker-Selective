@@ -586,6 +586,33 @@ public class ClusterController {
         }
     }
 
+    // ── Live discussion feed — polled by the frontend during post-session
+    // discussion so messages appear as models respond, instead of waiting for
+    // the whole round to finish. Backed by ConsensusService's in-memory feed
+    // (pushDiscussionMessage/pollDiscussionMessages), which was written and
+    // used internally by runDiscussion() but never had an HTTP route wired to
+    // it — every poll from ClusterDashboard.jsx was 404ing silently (caught
+    // and swallowed client-side), so the live discussion panel never actually
+    // updated in real time. ─────────────────────────────────────────────────
+    @GetMapping("/discussion/live")
+    public ResponseEntity<?> getLiveDiscussion(
+            @RequestParam Integer clusterId,
+            @RequestParam(defaultValue = "0") Integer since,
+            Authentication authentication) {
+        try {
+            String userEmail = authentication.getName();
+            User requestingUser = userRepository.findByEmail(userEmail)
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+            if (!membershipRepository.existsByUserIdAndClusterId(requestingUser.getId(), clusterId)) {
+                return ResponseEntity.status(403).body(Map.of("error", "Not a member of this cluster"));
+            }
+            List<Map<String, Object>> messages = ConsensusService.pollDiscussionMessages(clusterId, since);
+            return ResponseEntity.ok(Map.of("messages", messages));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     // ── Durable consensus history — backs the History panel across sessions/devices ──
     @GetMapping("/consensus/history")
     public ResponseEntity<?> getConsensusHistory(

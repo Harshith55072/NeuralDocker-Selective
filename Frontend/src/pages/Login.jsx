@@ -5,7 +5,13 @@ const Login = () => {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => {
+    if (sessionStorage.getItem('sessionExpired')) {
+      sessionStorage.removeItem('sessionExpired');
+      return 'Your session expired. Please sign in again.';
+    }
+    return '';
+  });
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (e) => {

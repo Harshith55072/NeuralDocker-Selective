@@ -299,19 +299,17 @@ All major behaviors are configurable per cluster:
 
 ## Understanding Scores
 
-- Models start at **0 points**
-- Each question: peers rate the answer 1–5. Score changes by `(avg_rating - 3) × 10`
-  - Perfect 5/5 → +20 points
-  - Neutral 3/5 → 0 points
-  - Poor 1/5 → -20 points
-- At session end, scores compress by 20% toward zero if the gap between best and worst exceeds 100 points — this keeps competition fair
-- Negative score = consistently underperforming. Auto-rotation removes the most negative model
+- Models start at a neutral **0** and move toward a **50–1000** bounded range as votes come in
+- Each model's score blends two things: **60% win rate** (how often its answer is rated highest) and **40% average vote quality** (peer ratings, 1–5, normalized to 0–1)
+- A **confidence factor** ramps up with vote count — a model's score stays close to neutral (500) for its first few votes and only reflects its true blended performance once it has 10+ votes, so one lucky or unlucky early round can't swing it far
+- Score is hard-clamped between **50 and 1000** — no model is ever permanently "dead weight" or unbeatably dominant
+- Auto-rotation (if enabled) replaces the lowest scorer at session end, but only once it has at least 3 votes and its score is below 350 (consistently underperforming, not just an early cold start)
 
 ---
 
 ## Security Notes
 
-- JWT authentication on all endpoints (15-minute token expiry)
+- JWT authentication on all endpoints (24-hour token expiry)
 - Public cluster endpoints are unauthenticated (browsing only)
 - Internal service communication uses a separate service token (`SERVICE_TOKEN` env var)
 - Change `SERVICE_TOKEN` and all passwords before any public deployment

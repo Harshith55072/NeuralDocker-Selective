@@ -316,13 +316,19 @@ public class ConsensusService {
         // Persist this round to consensus_log in background — never let a logging
         // failure kill the answer. This is what backs the durable history endpoint;
         // the in-memory `messages` state on the frontend is session-only.
-        final List<Map<String, Object>> responsesForLog = new ArrayList<>(finalResponses);
-        final String winnerModelForLog = (String) winner.get("model");
-        final Integer clusterIdForLog = cluster.getId();
-        final String promptForLog = prompt;
-        final String systemPromptForLog = systemPrompt;
-        CompletableFuture.runAsync(() -> saveConsensusLog(
-                clusterIdForLog, promptForLog, systemPromptForLog, winnerModelForLog, responsesForLog));
+        // Gated on cluster.sessionHistory: this flag existed on the Cluster entity,
+        // was saved from ClusterSettings.jsx, and round-tripped correctly through
+        // the API — but nothing ever read it, so turning "Session History" off in
+        // the UI silently did nothing (history kept being recorded regardless).
+        if (Boolean.TRUE.equals(cluster.getSessionHistory())) {
+            final List<Map<String, Object>> responsesForLog = new ArrayList<>(finalResponses);
+            final String winnerModelForLog = (String) winner.get("model");
+            final Integer clusterIdForLog = cluster.getId();
+            final String promptForLog = prompt;
+            final String systemPromptForLog = systemPrompt;
+            CompletableFuture.runAsync(() -> saveConsensusLog(
+                    clusterIdForLog, promptForLog, systemPromptForLog, winnerModelForLog, responsesForLog));
+        }
 
         // Update stats in background — never let a stats failure kill the answer
         final List<Map<String, Object>> responsesForStats = new ArrayList<>(finalResponses);
@@ -586,7 +592,14 @@ public class ConsensusService {
 
     private List<Map<String, Object>> runDiscussion(Cluster cluster, List<User> systems, String lastPrompt) { 
         System.out.println("Starting post-session discussion for cluster: " + cluster.getName()); 
-    
+
+        // Clear any messages left over from a previous session's discussion.
+        // Without this, the live feed is an ever-growing list keyed only by
+        // clusterId, and the frontend always polls starting at since=0 for a
+        // new session — so every past discussion message ever pushed for this
+        // cluster would get replayed into the panel alongside the new ones.
+        clearDiscussionFeed(cluster.getId());
+
         int rounds = cluster.getDiscussionRounds(); 
         boolean anonymous = Boolean.TRUE.equals(cluster.getAnonymousDiscussion()); 
         int timeoutSeconds = cluster.getNodeTimeoutSeconds(); 

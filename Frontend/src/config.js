@@ -72,3 +72,45 @@ export const clearClusterSession = () => {
     localStorage.removeItem('clusterBackendUrl'); 
     console.log('Cluster session cleared — reverted to local backend.'); 
 }; 
+
+/**
+ * Global 401 handling. A 401 means the JWT was missing/invalid/expired (the
+ * backend's SecurityConfiguration returns 401 specifically for that, distinct
+ * from a legitimate 403 access-denied — see its authenticationEntryPoint).
+ * `ProtectedRoute` in App.jsx only checks that a token is PRESENT in
+ * localStorage, not that it's still valid, so a stale token (e.g. left over
+ * from weeks ago) otherwise leaves the user stuck on a page where every
+ * backend call silently 401/403s forever with no explanation. This patches
+ * window.fetch once, at startup, to catch that specific case and bounce back
+ * to /login with a message — without touching legitimate 403s (host-only
+ * actions, etc.) or 401s from calls that never had a token to begin with
+ * (e.g. a failed login attempt itself).
+ */
+let authFetchPatched = false;
+export const installAuthFetchInterceptor = () => {
+    if (authFetchPatched) return;
+    authFetchPatched = true;
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+        const response = await realFetch(...args);
+        if (response.status === 401) {
+            const init = args[1] || {};
+            const h = init.headers;
+            const authHeader = h instanceof Headers
+                ? (h.get('Authorization') || h.get('authorization'))
+                : (h?.Authorization || h?.authorization);
+            if (authHeader && localStorage.getItem('token')) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('userEmail');
+                localStorage.removeItem('accountName');
+                localStorage.removeItem('userId');
+                sessionStorage.setItem('sessionExpired', '1');
+                const p = window.location.pathname;
+                if (!['/login', '/register', '/', '/license'].includes(p)) {
+                    window.location.href = '/login';
+                }
+            }
+        }
+        return response;
+    };
+};
