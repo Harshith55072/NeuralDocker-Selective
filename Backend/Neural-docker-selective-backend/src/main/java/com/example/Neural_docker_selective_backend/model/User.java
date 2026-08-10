@@ -38,6 +38,16 @@ public class User implements UserDetails {
     private Integer consecutiveTimeouts;
     private Boolean isOnline;
     private Boolean resourcePermissionGranted = true;
+    // True only for stub User rows created inside ClusterService.joinCluster's
+    // orElseGet — i.e. a *different* machine's account, mirrored into this
+    // machine's local DB solely because they joined a cluster this machine
+    // hosts. Their tunnelUrl is set once, directly, from the workerTunnelUrl
+    // payload at join time — it must NEVER be overwritten by this machine's
+    // own ngrok_monitor push (see registerTunnelForAllHosts), or a worker's
+    // real tunnel gets silently replaced with the host's own tunnel URL.
+    // Real local accounts (whoever actually registered/logged in on this
+    // machine, host or worker) always default to false here.
+    private Boolean provisionedRemotely = false;
 
     public User() {
     }
@@ -170,8 +180,16 @@ public class User implements UserDetails {
             return this;
         }
 
+        private Boolean provisionedRemotely;
+        public UserBuilder provisionedRemotely(Boolean v) {
+            this.provisionedRemotely = v;
+            return this;
+        }
+
         public User build() {
-            return new User(id, accountName, email, password, role, clusterId, isHost, score, wins, losses, votes, systemIp, tunnelUrl, modelFolder, consecutiveTimeouts, isOnline, resourcePermissionGranted);
+            User u = new User(id, accountName, email, password, role, clusterId, isHost, score, wins, losses, votes, systemIp, tunnelUrl, modelFolder, consecutiveTimeouts, isOnline, resourcePermissionGranted);
+            if (provisionedRemotely != null) u.setProvisionedRemotely(provisionedRemotely);
+            return u;
         }
     }
 
@@ -293,6 +311,14 @@ public class User implements UserDetails {
 
     public void setTunnelUrl(String tunnelUrl) {
         this.tunnelUrl = tunnelUrl;
+    }
+
+    public Boolean getProvisionedRemotely() {
+        return provisionedRemotely != null ? provisionedRemotely : false;
+    }
+
+    public void setProvisionedRemotely(Boolean provisionedRemotely) {
+        this.provisionedRemotely = provisionedRemotely;
     }
 
     @Override

@@ -450,6 +450,9 @@ public class ClusterService {
                             .accountName(accountName != null && !accountName.isBlank() ? accountName : userEmail)
                             .password("") // never used for login on this instance — auth is JWT-only
                             .role(Role.USER)
+                            .provisionedRemotely(true) // see registerTunnelForAllHosts: this row's
+                            // tunnelUrl must come only from workerTunnelUrl below, never from this
+                            // machine's own ngrok_monitor push.
                             .build();
                     return userRepository.save(remote);
                 });
@@ -573,18 +576,50 @@ public class ClusterService {
 
     @Transactional
     public void registerTunnelForAllHosts(String aiTunnelUrl, String backendTunnelUrl) {
+        // This push comes from THIS machine's own ngrok_monitor, so aiTunnelUrl is
+        // THIS machine's own ai-service tunnel. Every real local account on this
+        // machine (host or worker — whoever actually registered/logged in here)
+        // needs it recorded on their own User row, because that's what
+        // getMyTunnelUrl()/"my-tunnel" hands back to the frontend as
+        // workerTunnelUrl when THIS machine's user joins someone else's cluster.
+        //
+        // Previously this only updated users who are a host somewhere, which
+        // happened to work for hosts (a host is a member-of-self immediately on
+        // cluster creation) but left pure workers' tunnelUrl permanently blank —
+        // nothing else in the app ever set it for them. That silently broke
+        // cross-node proxying (model load/unload/scan/stats) for any worker,
+        // since the host would fall back to routing by raw IP, which doesn't
+        // work across NAT/different networks.
+        //
+        // provisionedRemotely rows are explicitly excluded: those are OTHER
+        // people's accounts, mirrored into this machine's DB only because they
+        // joined a cluster this machine hosts. Their tunnelUrl is THEIR OWN
+        // machine's tunnel (set once from workerTunnelUrl at join time) and must
+        // never be stamped over with this machine's tunnel.
+        List<User> localUsers = userRepository.findAll().stream()
+                .filter(u -> !Boolean.TRUE.equals(u.getProvisionedRemotely()))
+                .collect(Collectors.toList());
+
+        if (aiTunnelUrl != null && !aiTunnelUrl.isBlank()) {
+            for (User u : localUsers) {
+                if (!aiTunnelUrl.equals(u.getTunnelUrl())) {
+                    u.setTunnelUrl(aiTunnelUrl);
+                    userRepository.save(u);
+                    System.out.println("AI tunnel saved for local account: " + u.getEmail() + " -> " + aiTunnelUrl);
+                }
+            }
+        }
+
         // Get ALL host memberships — update every host user and every cluster
         List<UserClusterMembership> allHostMemberships = membershipRepository.findByIsHost(true);
 
         if (allHostMemberships.isEmpty()) {
-            // Fallback: legacy isHost flag on User table
+            // Fallback: legacy isHost flag on User table. tunnelUrl itself is
+            // already handled for every local user above — this only still
+            // needs to update each cluster's hostTunnelUrl via the legacy hostId.
             userRepository.findAll().stream()
                     .filter(u -> Boolean.TRUE.equals(u.getIsHost()))
                     .forEach(u -> {
-                        if (aiTunnelUrl != null && !aiTunnelUrl.isBlank()) {
-                            u.setTunnelUrl(aiTunnelUrl);
-                            userRepository.save(u);
-                        }
                         // Update clusters via legacy hostId
                         clusterRepository.findAll().stream()
                                 .filter(c -> u.getId().equals(c.getHostId()))
@@ -605,16 +640,8 @@ public class ClusterService {
                 .map(UserClusterMembership::getUserId)
                 .collect(java.util.stream.Collectors.toSet());
 
-        // Update every host user's tunnelUrl
-        for (Integer hostUserId : hostUserIds) {
-            userRepository.findById(hostUserId).ifPresent(u -> {
-                if (aiTunnelUrl != null && !aiTunnelUrl.isBlank()) {
-                    u.setTunnelUrl(aiTunnelUrl);
-                    userRepository.save(u);
-                    System.out.println("AI tunnel saved for host: " + u.getEmail() + " → " + aiTunnelUrl);
-                }
-            });
-        }
+        // (Host users' tunnelUrl is already covered by the local-users update above —
+        // a host is always a local, non-provisionedRemotely account on this machine.)
 
         // Update every cluster's hostTunnelUrl
         Set<Integer> clusterIdsToUpdate = new HashSet<>();
