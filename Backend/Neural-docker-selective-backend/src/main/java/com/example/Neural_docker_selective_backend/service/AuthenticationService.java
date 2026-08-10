@@ -35,6 +35,17 @@ public class AuthenticationService {
     }
 
     public AuthenticationResponse register(RegisterRequest request, HttpServletRequest servletRequest) {
+        if (request.getEmail() == null || request.getEmail().isBlank()
+                || request.getPassword() == null || request.getPassword().isBlank()
+                || request.getAccountName() == null || request.getAccountName().isBlank()) {
+            throw new RuntimeException("Account name, email, and password are all required.");
+        }
+        if (repository.findByEmail(request.getEmail()).isPresent()) {
+            // Pre-check instead of relying on the DB's unique constraint to fail:
+            // a raw DataIntegrityViolationException leaks the SQL statement, table/
+            // column names, and constraint name straight to the client otherwise.
+            throw new RuntimeException("An account with this email already exists.");
+        }
         var user = User.builder()
                 .accountName(request.getAccountName())
                 .email(request.getEmail())

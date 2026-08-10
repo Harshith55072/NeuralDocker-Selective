@@ -1,5 +1,7 @@
 package com.example.Neural_docker_selective_backend.config;
 
+import com.example.Neural_docker_selective_backend.security.AuthRateLimitFilter;
+import com.example.Neural_docker_selective_backend.security.InferenceRateLimitFilter;
 import com.example.Neural_docker_selective_backend.security.JwtAuthenticationFilter;
 import com.example.Neural_docker_selective_backend.security.ServiceTokenFilter;
 import org.springframework.context.annotation.Bean;
@@ -25,14 +27,20 @@ public class SecurityConfiguration {
     private final JwtAuthenticationFilter jwtAuthFilter;
     private final AuthenticationProvider authenticationProvider;
     private final ServiceTokenFilter serviceTokenFilter;
+    private final AuthRateLimitFilter authRateLimitFilter;
+    private final InferenceRateLimitFilter inferenceRateLimitFilter;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthFilter,
             AuthenticationProvider authenticationProvider,
-            ServiceTokenFilter serviceTokenFilter) {
+            ServiceTokenFilter serviceTokenFilter,
+            AuthRateLimitFilter authRateLimitFilter,
+            InferenceRateLimitFilter inferenceRateLimitFilter) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.authenticationProvider = authenticationProvider;
         this.serviceTokenFilter = serviceTokenFilter;
+        this.authRateLimitFilter = authRateLimitFilter;
+        this.inferenceRateLimitFilter = inferenceRateLimitFilter;
     }
 
     @Bean
@@ -74,10 +82,23 @@ public class SecurityConfiguration {
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
             .authenticationProvider(authenticationProvider)
-            // Service token filter runs first so it can authenticate
-            // service requests before the JWT filter sees them
+            // Order matters both for correctness AND because addFilterBefore
+            // needs its anchor class to already have a registered position —
+            // referencing a custom filter class as an anchor before that
+            // filter itself has been placed throws "does not have a
+            // registered order" at startup. So: position serviceTokenFilter
+            // and jwtAuthFilter first (against the well-known
+            // UsernamePasswordAuthenticationFilter anchor), THEN authRateLimitFilter
+            // can reference ServiceTokenFilter.class, and inferenceRateLimitFilter
+            // can reference JwtAuthenticationFilter.class.
+            //
+            // Resulting runtime order: rate limiter (IP) → service token check
+            // → JWT auth → rate limiter (per-user, needs auth to have run) →
+            // rest of the chain.
             .addFilterBefore(serviceTokenFilter, UsernamePasswordAuthenticationFilter.class)
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterBefore(authRateLimitFilter, ServiceTokenFilter.class)
+            .addFilterAfter(inferenceRateLimitFilter, JwtAuthenticationFilter.class);
 
         return http.build();
     }

@@ -44,9 +44,14 @@ DISCUSSION_TOKENS = 256  # Shorter responses for discussion — saves context sp
 TEMPERATURE       = 0.7 
 MONITOR_URL       = os.getenv("MONITOR_URL", "http://system-monitor:8001") 
  
-# Maximum characters for discussion prompt before truncation 
-# Prevents context window overflow during long discussion sessions 
-MAX_DISCUSSION_PROMPT_CHARS = 2000 
+# Character budget for the discussion prompt, post chat-template formatting.
+# n_ctx=512, DISCUSSION_TOKENS=256 reserved for the response → ~256 tokens left
+# for the prompt itself. At a conservative ~3.5 chars/token that's ~900 chars —
+# previously this constant was set to 2000 (would overflow n_ctx=512 on its own,
+# before even adding the response budget) AND was never actually used anywhere
+# in the code, so it enforced nothing. Now wired into both truncation points in
+# the discussion path (see consensus_discuss and _discuss_on_cpu below).
+MAX_DISCUSSION_PROMPT_CHARS = 900 
 
 # Default models directory — always use Docker volume mount
 MODELS_DIR = os.getenv("MODELS_DIR", "/models")
@@ -82,7 +87,16 @@ def detect_formatter(path: str) -> Callable:
     # Llama-3 / Meta header format
     if any(k in name for k in FORMATTERS["llama3"]):
         def llama3_fmt(hist, p, sys_p):
-            out = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{sys_p}<|eot_id|>"
+            # No leading <|begin_of_text|> here — llama-cpp-python's Llama.__call__
+            # already auto-prepends the real BOS token when tokenizing (add_bos=True
+            # is the default). Including it here as literal text used to get
+            # tokenized as a SECOND BOS token on top of that, which llama.cpp
+            # itself warned about at runtime: "Detected duplicate leading
+            # <|begin_of_text|> in prompt, this will likely reduce response
+            # quality" — confirmed happening live before this fix, on every
+            # Llama-3-family model's main answers (this formatter is shared by
+            # ask()/rate()/discussion, not just one code path).
+            out = f"<|start_header_id|>system<|end_header_id|>\n\n{sys_p}<|eot_id|>"
             for m in hist:
                 out += (
                     f"<|start_header_id|>user<|end_header_id|>\n\n{m['content']}<|eot_id|>"
@@ -276,6 +290,13 @@ class ConsensusModel:
         self.losses = 0
         self.votes = 0
         self.llm = None
+        # Separate, cached CPU instance used only for post-session discussion
+        # (see _discuss_on_cpu) — kept distinct from self.llm because discussion
+        # deliberately runs on CPU with a small context even when the main model
+        # is GPU-loaded, to avoid doubling VRAM usage. Lazily created on first
+        # use, then reused across every discussion round instead of reloading
+        # the GGUF file from disk each time.
+        self.discuss_llm = None
 
         # Defer GPU layer calculation to load() so VRAM is probed
         # at the actual moment of loading, not at object creation
@@ -346,6 +367,14 @@ class ConsensusModel:
                     torch.cuda.empty_cache()
             except ImportError:
                 pass
+
+        if self.discuss_llm is not None:
+            try:
+                del self.discuss_llm
+            except Exception as e:
+                print(f"Error during del self.discuss_llm: {e}")
+            self.discuss_llm = None
+            gc.collect()
 
     def ask(self, prompt: str, system_prompt: str, max_tokens: int = MAX_TOKENS, temperature: float = TEMPERATURE) -> str: 
         if Llama is None: 
@@ -498,10 +527,13 @@ async def consensus_discuss(req: PromptRequest):
     if not active_models: 
         raise HTTPException(status_code=400, detail="No models loaded.") 
  
-    # Truncate aggressively — small models can't handle long context 
+    # Keep the tail — the Java layer builds this prompt with the most recent/
+    # relevant content last (discussion history, then this model's own notes,
+    # then the instruction), so truncating from the front preserves what
+    # matters most when the full thing doesn't fit a small context window.
     prompt = req.prompt 
-    if len(prompt) > 600: 
-        prompt = prompt[-600:] 
+    if len(prompt) > MAX_DISCUSSION_PROMPT_CHARS: 
+        prompt = prompt[-MAX_DISCUSSION_PROMPT_CHARS:] 
  
     results = [] 
     for m in active_models: 
@@ -527,66 +559,70 @@ def _discuss_on_cpu(m: ConsensusModel, prompt: str, system_prompt: str) -> str:
     if not os.path.exists(m.path): 
         return f"[{m.name}] model file not found" 
  
-    cpu_llm = None 
     try: 
-        cpu_llm = Llama( 
-            model_path=m.path, 
-            n_gpu_layers=0, 
-            n_ctx=512, 
-            verbose=False, 
+        # Reuse a cached CPU instance across discussion rounds instead of
+        # reloading the whole GGUF file from disk on every single call —
+        # previously this created and destroyed a fresh Llama() every round,
+        # for every model, which is slow (full disk load each time) and eats
+        # into the per-node timeout budget that should go toward generation.
+        if m.discuss_llm is None:
+            m.discuss_llm = Llama(
+                model_path=m.path,
+                n_gpu_layers=0,
+                n_ctx=512,
+                verbose=False,
+            )
+        cpu_llm = m.discuss_llm
+
+        # `prompt` here is the real discussion prompt the Java layer built —
+        # the base prompt (default, or the cluster's custom discussion prompt
+        # from ClusterSettings), the rolling history of what other models said
+        # in earlier rounds, and this model's own saved notes from last round,
+        # already truncated to MAX_DISCUSSION_PROMPT_CHARS by the caller.
+        #
+        # Previously this function ignored all of that and rebuilt a generic
+        # prompt from scratch by regex-matching one specific substring that
+        # only exists in the *default* auto-generated base prompt — silently
+        # breaking custom discussion prompts entirely, and meaning models
+        # never saw each other's messages or their own notes, no matter what.
+        # Using the real prompt directly fixes both at once.
+        instruction = ( 
+            "\n\nRespond to the discussion above in 2-3 short, direct sentences — " 
+            "reference what others said or your own notes if there's anything " 
+            "above. Then on a new line write: NOTES: followed by 1 short " 
+            "sentence to remember for next round.\n\nYour response:" 
         ) 
- 
-        # Simple, direct prompt — small models get confused by complex instructions 
-        # Extract just the core question from the full discussion prompt 
-        # The Java layer sends a complex prompt; we simplify it here 
-        simple_prompt = ( 
-            "You are an AI model in a discussion with other AI models.\n" 
-            "Write 2-3 short sentences sharing what you think about the last question you answered. " 
-            "Be direct and specific. Then on a new line write: " 
-            "NOTES: followed by 1-2 sentences of what you want to remember.\n\n" 
-            "Your response:" 
+        content = prompt.strip() + instruction 
+
+        full_prompt = m.formatter( 
+            [], content, 
+            "You are an AI model in a discussion with other AI models. Be direct and specific." 
         ) 
- 
-        # Include just the last question context if we can extract it 
-        last_q_marker = 'last question asked was: "' 
-        if last_q_marker in prompt: 
-            start = prompt.index(last_q_marker) + len(last_q_marker) 
-            end = prompt.index('"', start) if '"' in prompt[start:start+200] else start + 100 
-            last_q = prompt[start:end] 
-            simple_prompt = ( 
-                f"You just answered this question: \"{last_q[:100]}\"\n\n" 
-                "Write 2-3 sentences: what was hard about it, what you noticed, or what you'd do differently. " 
-                "Be direct. Then write: NOTES: followed by 1 sentence to remember.\n\n" 
-                "Your response:" 
-            ) 
- 
-        full_prompt = m.formatter([], simple_prompt, "You are a helpful AI.") 
-        if len(full_prompt) > 400: 
-            full_prompt = full_prompt[-400:] 
+        if len(full_prompt) > MAX_DISCUSSION_PROMPT_CHARS: 
+            full_prompt = full_prompt[-MAX_DISCUSSION_PROMPT_CHARS:] 
  
         out = cpu_llm( 
             full_prompt, 
-            max_tokens=150, 
+            max_tokens=DISCUSSION_TOKENS, 
             temperature=0.6, 
             stop=["<|im_end|>", "</s>", "<|eot_id|>", "\n\n\n"], 
         ) 
         raw = out["choices"][0]["text"].strip() 
  
-        # Parse NOTES: marker (simpler than XML tags for small models) 
-        if "NOTES:" in raw: 
-            parts = raw.split("NOTES:", 1) 
-            return parts[0].strip() + "\n<notes>" + parts[1].strip()[:200] + "</notes>" 
+        # Parse the notes marker case-insensitively — small models don't reliably 
+        # match exact casing (e.g. "Notes:" instead of "NOTES:") even when the 
+        # instruction spells it out, confirmed live during testing. 
+        notes_match = re.search(r"notes:", raw, re.IGNORECASE) 
+        if notes_match: 
+            split_at = notes_match.start() 
+            marker_end = notes_match.end() 
+            return raw[:split_at].strip() + "\n<notes>" + raw[marker_end:].strip()[:200] + "</notes>" 
         return raw 
  
     except Exception as e: 
         print(f"CPU discussion error for {m.name}: {e}") 
         return f"[{m.name}] discussion error" 
     finally: 
-        if cpu_llm is not None: 
-            try: 
-                del cpu_llm 
-            except Exception: 
-                pass 
         gc.collect() 
 
 
