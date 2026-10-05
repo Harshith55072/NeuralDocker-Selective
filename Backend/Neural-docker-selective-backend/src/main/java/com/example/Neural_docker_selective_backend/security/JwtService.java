@@ -36,6 +36,33 @@ public class JwtService {
         return generateToken(new HashMap<>(), userDetails);
     }
 
+    // --- Backend -> AI service calls (audit finding S3) ---------------------------------
+    // The AI service requires a JWT signed with the shared secret. The backend mints a
+    // short-lived one per outgoing request. It carries scope=ai-service so that
+    // JwtAuthenticationFilter can refuse to accept it as a login for THIS backend: if the
+    // token ever reaches a node that isn't trusted (e.g. a worker supplied a bogus
+    // tunnel URL), it cannot be replayed against the API.
+    private static final String AI_SCOPE_CLAIM = "scope";
+    private static final String AI_SCOPE = "ai-service";
+    // 5 minutes rather than seconds so machines whose clocks differ a little still agree.
+    private static final long AI_TOKEN_TTL_MS = 5 * 60 * 1000L;
+
+    public String generateAiServiceToken() {
+        long now = System.currentTimeMillis();
+        return Jwts
+                .builder()
+                .claim(AI_SCOPE_CLAIM, AI_SCOPE)
+                .subject("backend-gateway")
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + AI_TOKEN_TTL_MS))
+                .signWith(getSignInKey())
+                .compact();
+    }
+
+    public boolean isAiServiceToken(String token) {
+        return AI_SCOPE.equals(extractClaim(token, c -> c.get(AI_SCOPE_CLAIM, String.class)));
+    }
+
     public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails) {
         return buildToken(extraClaims, userDetails, jwtExpiration);
     }

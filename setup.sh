@@ -12,6 +12,49 @@ set_env_var() {
   echo "${key}=${value}" >> "$file"
 }
 
+# ── Secrets ────────────────────────────────────────────────────────────────
+# JWT_SECRET and SERVICE_TOKEN are REQUIRED (the backend refuses to start without
+# them) and have no built-in defaults, because any default would be public.
+# Generate them only when missing, blank, too short, or one of the old public
+# defaults. A value you set yourself (e.g. the host's JWT_SECRET so two machines
+# can trust each other) is left alone.
+PUBLIC_JWT_DEFAULT="404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970"
+PLACEHOLDER_SERVICE_TOKEN="nd-service-token-change-me-in-production"
+
+get_env_var() {
+  grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r'
+}
+
+gen_b64() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -base64 "$1" | tr -d '\n'
+  else head -c "$1" /dev/urandom | base64 | tr -d '\n'; fi
+}
+
+gen_hex() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -hex "$1" | tr -d '\n'
+  else head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; fi
+}
+
+ensure_secrets() {
+  touch .env
+  local jwt token changed=""
+  jwt="$(get_env_var JWT_SECRET)"
+  token="$(get_env_var SERVICE_TOKEN)"
+  if [ -z "$jwt" ] || [ "$jwt" = "$PUBLIC_JWT_DEFAULT" ] || [ "${#jwt}" -lt 43 ]; then
+    set_env_var "JWT_SECRET" "$(gen_b64 48)"; changed="$changed JWT_SECRET"
+  fi
+  if [ -z "$token" ] || [ "$token" = "$PLACEHOLDER_SERVICE_TOKEN" ] || [ "${#token}" -lt 16 ]; then
+    set_env_var "SERVICE_TOKEN" "$(gen_hex 24)"; changed="$changed SERVICE_TOKEN"
+  fi
+  if [ -n "$changed" ]; then
+    echo "Generated new secret(s) in .env:$changed"
+    echo "(To join another machine's cluster, set JWT_SECRET in .env to that host's value.)"
+    echo ""
+  fi
+}
+
+ensure_secrets
+
 echo "=================================================="
 echo " NeuralDocker Selective — Setup"
 echo "=================================================="

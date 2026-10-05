@@ -155,7 +155,7 @@ cp .env.example .env
 ```
 Then open `.env` and fill in `NGROK_AUTHTOKEN` (skip this if you don't need cross-network clusters yet — you can add it later; without it, the `ngrok`/`ngrok-monitor` containers will just idle instead of doing anything). Get a free token at `https://dashboard.ngrok.com/get-started/your-authtoken`.
 
-`SERVICE_TOKEN` and `JWT_SECRET` already have safe defaults in `.env.example` for local/single-machine use — you don't need to touch them unless you're deploying somewhere shared.
+`SERVICE_TOKEN` and `JWT_SECRET` are **required** and have no built-in defaults (a default would be public). `run.bat` (Windows) and `./setup.sh` generate strong random values into `.env` for you; the backend refuses to start if they are missing, weak, or one of the old public defaults. To join another machine's cluster, set your `JWT_SECRET` to the host's value.
 
 **This file is yours to keep.** It's gitignored (never committed, never touched by `git pull`), and re-running `setup.sh` below only adds/updates its own `CUDA_*` lines — your token and secrets are left alone.
 
@@ -312,8 +312,10 @@ All major behaviors are configurable per cluster:
 - JWT authentication on all endpoints (24-hour token expiry)
 - Public cluster endpoints are unauthenticated (browsing only)
 - Internal service communication uses a separate service token (`SERVICE_TOKEN` env var)
-- Change `SERVICE_TOKEN` and all passwords before any public deployment
-- ngrok tunnel registration requires the service token
+- `JWT_SECRET` and `SERVICE_TOKEN` are generated per install and required at startup (no public defaults); change the database/pgAdmin passwords in `docker-compose.yml` before any shared deployment
+- ngrok tunnel registration requires the service token (or a logged-in local user registering their own tunnel)
+- The AI service (the one exposed through the public ngrok tunnel) requires a valid JWT on every request, signed with the cluster's shared `JWT_SECRET`, and only accepts browser requests from the local frontend. Nodes in one cluster must therefore share the same `JWT_SECRET`
+- The system monitor (recordings, stats) has no authentication of its own, so its port is bound to `127.0.0.1` only, and every folder name it receives is checked to stay inside the recordings directory
 
 ---
 

@@ -32,13 +32,12 @@ services:
       SPRING_DATASOURCE_USERNAME: neuraluser
       SPRING_DATASOURCE_PASSWORD: neuralpass
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      # Service token for internal services (ngrok monitor)
-      # Change this in production — must match SERVICE_TOKEN in ngrok_monitor.py
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-nd-service-token-change-me-in-production}
-      # Falls back to the same literal as application.properties if unset/blank —
-      # keeps a bare `docker compose up` (no .env at all) working for local/single-
-      # machine use. Set a real secret in .env before any shared deployment.
-      JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+      # Secrets are REQUIRED and have no fallback: a default would be public (it would
+      # live in this repo). run.bat / setup.sh generate them into .env automatically.
+      # SERVICE_TOKEN must match the one given to ngrok-monitor below.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN is not set - run run.bat or setup.sh, or see .env.example}
+      # Machines in the same cluster must share the same JWT_SECRET (base64, >= 32 bytes).
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is not set - run run.bat or setup.sh, or see .env.example}
     restart: unless-stopped
 
   pgadmin:
@@ -58,7 +57,9 @@ services:
       context: ./system-monitor
     container_name: neural_system_monitor
     ports:
-      - "8001:8001"
+      # Bound to this machine only: the system monitor has no authentication of its own, and
+      # only the local browser and the ai-service container (over the docker network) need it.
+      - "127.0.0.1:8001:8001"
     volumes:
       # Persist recordings across container restarts
       - recordings_data:/app/recordings
@@ -83,6 +84,9 @@ services:
       # Share recordings volume so ai-service can proxy recording endpoints
       - recordings_data:/app/recordings
     environment:
+      # The AI service authenticates every request with a JWT signed by this shared secret
+      # (audit finding S3). Required: the container refuses to start without a valid one.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is not set - run run.bat or setup.sh, or see .env.example}
       - MONITOR_URL=http://system-monitor:8001
       # Controls CPU sampling rate for stats (higher = smoother graphs)
       - STATS_SAMPLE_INTERVAL=0.5
@@ -132,7 +136,7 @@ services:
     container_name: neural_ngrok_monitor
     environment:
       - BACKEND_URL=http://backend:8080
-      - SERVICE_TOKEN=${SERVICE_TOKEN:-nd-service-token-change-me-in-production}
+      - SERVICE_TOKEN=${SERVICE_TOKEN:?SERVICE_TOKEN is not set - run run.bat or setup.sh, or see .env.example}
       - NGROK_API_URL=http://ngrok:4040/api/tunnels
     depends_on:
       - ngrok

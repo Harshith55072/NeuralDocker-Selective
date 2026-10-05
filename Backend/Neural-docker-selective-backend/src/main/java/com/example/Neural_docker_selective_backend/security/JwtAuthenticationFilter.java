@@ -45,6 +45,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         jwt = authHeader.substring(7);
         try {
             userEmail = jwtService.extractUsername(jwt);
+            if (jwtService.isAiServiceToken(jwt)) {
+                // Minted by a backend for AI-service calls only (see JwtService). Never a login.
+                filterChain.doFilter(request, response);
+                return;
+            }
         } catch (Exception e) {
             // Malformed / bad-signature / expired token — extractUsername's
             // underlying Jwts.parser().verifyWith(...) throws here. Let the

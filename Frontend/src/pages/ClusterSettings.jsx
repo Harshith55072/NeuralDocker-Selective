@@ -4,6 +4,62 @@ import { getClusterAPI, clearClusterSession } from '../config';
 
 
 
+// ── Sub-components (module scope on purpose: defining these inside the page
+// component gives them a new identity every render, which remounts inputs and
+// drops focus on every keystroke) ───────────────────────────────────────────
+const Toggle = ({ checked, onChange }) => (
+  <label style={{ position:'relative', width:44, height:24, flexShrink:0, cursor:'pointer' }}>
+    <input type="checkbox" checked={checked} onChange={onChange}
+      style={{ opacity:0, width:0, height:0, position:'absolute' }} />
+    <div style={{
+      position:'absolute', inset:0, borderRadius:12,
+      background: checked ? 'var(--accent)' : 'var(--bg4)',
+      border:`1px solid ${checked ? 'var(--accent)' : 'var(--border-bright)'}`,
+      transition:'background .18s, border-color .18s'
+    }}>
+      <div style={{
+        position:'absolute', top:3,
+        left: checked ? 23 : 3,
+        width:16, height:16, borderRadius:'50%',
+        background: checked ? '#000' : 'var(--text-dim)',
+        transition:'left .18s'
+      }}/>
+    </div>
+  </label>
+);
+
+const Row = ({ label, desc, hint, last, children }) => (
+  <div style={{
+    display:'flex', alignItems:'center', justifyContent:'space-between',
+    padding:'15px 20px',
+    borderBottom: last ? 'none' : '1px solid var(--border)',
+    gap:24
+  }}>
+    <div style={{ flex:1 }}>
+      <div style={{ fontSize:13, fontWeight:500, marginBottom:3, color:'var(--text)' }}>{label}</div>
+      {desc && <div style={{ fontSize:11, color:'var(--text-mid)', lineHeight:1.55 }}>{desc}</div>}
+      {hint && <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', fontFamily:'var(--font-mono)', marginTop:4 }}>{hint}</div>}
+    </div>
+    <div style={{ flexShrink:0 }}>{children}</div>
+  </div>
+);
+
+const NInput = ({ value, onChange, min, max, step }) => (
+  <input type="number" min={min} max={max} step={step} value={value} onChange={onChange}
+    style={{ background:'var(--bg3)', border:'1px solid var(--border-bright)', color:'var(--text)', fontFamily:'var(--font-mono)', fontSize:13, padding:'7px 12px', borderRadius:'var(--radius-md)', outline:'none', width:100, textAlign:'right', transition:'border-color .15s' }}
+    onFocus={e => e.target.style.borderColor = 'var(--accent-border)'}
+    onBlur={e => e.target.style.borderColor = 'var(--border-bright)'} />
+);
+
+const NSelect = ({ value, onChange, options }) => (
+  <select value={value} onChange={onChange}
+    style={{ background:'var(--bg3)', border:'1px solid var(--border-bright)', color:'var(--text)', fontFamily:'var(--font-mono)', fontSize:12, padding:'7px 12px', borderRadius:'var(--radius-md)', outline:'none', minWidth:150, cursor:'pointer', transition:'border-color .15s' }}
+    onFocus={e => e.target.style.borderColor = 'var(--accent-border)'}
+    onBlur={e => e.target.style.borderColor = 'var(--border-bright)'}>
+    {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+  </select>
+);
+
 const ClusterSettings = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -180,60 +236,6 @@ const ClusterSettings = () => {
     } catch { alert('Error resetting scores.'); }
     setResettingScores(false);
   };
-
-  // ── Sub-components ────────────────────────────────────────────────────────
-  const Toggle = ({ checked, onChange }) => (
-    <label style={{ position:'relative', width:44, height:24, flexShrink:0, cursor:'pointer' }}>
-      <input type="checkbox" checked={checked} onChange={onChange}
-        style={{ opacity:0, width:0, height:0, position:'absolute' }} />
-      <div style={{
-        position:'absolute', inset:0, borderRadius:12,
-        background: checked ? 'var(--accent)' : 'var(--bg4)',
-        border:`1px solid ${checked ? 'var(--accent)' : 'var(--border-bright)'}`,
-        transition:'background .18s, border-color .18s'
-      }}>
-        <div style={{
-          position:'absolute', top:3,
-          left: checked ? 23 : 3,
-          width:16, height:16, borderRadius:'50%',
-          background: checked ? '#000' : 'var(--text-dim)',
-          transition:'left .18s'
-        }}/>
-      </div>
-    </label>
-  );
-
-  const Row = ({ label, desc, hint, last, children }) => (
-    <div style={{
-      display:'flex', alignItems:'center', justifyContent:'space-between',
-      padding:'15px 20px',
-      borderBottom: last ? 'none' : '1px solid var(--border)',
-      gap:24
-    }}>
-      <div style={{ flex:1 }}>
-        <div style={{ fontSize:13, fontWeight:500, marginBottom:3, color:'var(--text)' }}>{label}</div>
-        {desc && <div style={{ fontSize:11, color:'var(--text-mid)', lineHeight:1.55 }}>{desc}</div>}
-        {hint && <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', fontFamily:'var(--font-mono)', marginTop:4 }}>{hint}</div>}
-      </div>
-      <div style={{ flexShrink:0 }}>{children}</div>
-    </div>
-  );
-
-  const NInput_TEST_MARKER = ({ value, onChange, min, max, step }) => (
-    <input type="number" min={min} max={max} step={step} value={value} onChange={onChange} data-marker="x"
-      style={{ background:'var(--bg3)', border:'1px solid var(--border-bright)', color:'var(--text)', fontFamily:'var(--font-mono)', fontSize:13, padding:'7px 12px', borderRadius:'var(--radius-md)', outline:'none', width:100, textAlign:'right', transition:'border-color .15s' }}
-      onFocus={e => e.target.style.borderColor = 'var(--accent-border)'}
-      onBlur={e => e.target.style.borderColor = 'var(--border-bright)'} />
-  );
-
-  const NSelect = ({ value, onChange, options }) => (
-    <select value={value} onChange={onChange}
-      style={{ background:'var(--bg3)', border:'1px solid var(--border-bright)', color:'var(--text)', fontFamily:'var(--font-mono)', fontSize:12, padding:'7px 12px', borderRadius:'var(--radius-md)', outline:'none', minWidth:150, cursor:'pointer', transition:'border-color .15s' }}
-      onFocus={e => e.target.style.borderColor = 'var(--accent-border)'}
-      onBlur={e => e.target.style.borderColor = 'var(--border-bright)'}>
-      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-    </select>
-  );
 
   // ── Sidebar nav items ─────────────────────────────────────────────────────
   const SECTIONS = [

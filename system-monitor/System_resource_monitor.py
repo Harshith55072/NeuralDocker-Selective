@@ -20,16 +20,51 @@ import uvicorn
 
 app = FastAPI(title="System Monitor API", version="1.3.0")
 
+# Origins are limited to the local frontend (was "*", which let any website the user visits
+# call this service on localhost). No cookies are used, so credentials are off.
+_CORS_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
-RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), "recordings") 
-os.makedirs(RECORDINGS_DIR, exist_ok=True) 
+RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), "recordings")
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
+_RECORDINGS_ROOT = os.path.realpath(RECORDINGS_DIR)
+
+
+# -- Path safety (audit finding S4) ---------------------------------------------------
+# Folder names come straight from HTTP requests. Several endpoints used to join them onto
+# RECORDINGS_DIR unchecked, so "../../x" or an absolute path could create directories,
+# read, delete or move files outside the recordings directory. Every user-supplied folder
+# now goes through these two helpers.
+def _resolve_in_recordings(*parts):
+    """Join parts under the recordings root and return the absolute, symlink-resolved path.
+    Raises ValueError if the result is not inside the recordings root (covers '..',
+    absolute paths, symlinks pointing outside, NUL bytes, other drives)."""
+    candidate = os.path.realpath(os.path.join(_RECORDINGS_ROOT, *parts))
+    if os.path.commonpath([_RECORDINGS_ROOT, candidate]) != _RECORDINGS_ROOT:
+        raise ValueError("path escapes the recordings directory")
+    return candidate
+
+
+def _safe_folder(folder):
+    """Validate a user-supplied folder name. Returns it normalised and relative to the
+    recordings root ('' means the root itself) or raises HTTP 400."""
+    try:
+        full = _resolve_in_recordings((folder or "").strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid folder")
+    rel = os.path.relpath(full, _RECORDINGS_ROOT)
+    return "" if rel == "." else rel 
  
 # Stats collection interval — CPU measurement uses this as its sampling window 
 # Higher = smoother but less responsive. 0.5s is a good balance. 
@@ -373,6 +408,7 @@ class SystemMonitor:
  
 
     def start_recording(self, folder: str = "system") -> bool:
+        folder = _safe_folder(folder)   # S4: raises 400 for anything outside the recordings dir
         with self._lock:
             if self.is_recording:
                 return False
@@ -425,13 +461,20 @@ monitor = SystemMonitor()
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 def _find_recording(filename: str, folder: str = None):
-    """Return the absolute path to a recording file, or None if not found."""
-    filename = os.path.basename(filename)
+    """Return the absolute path to a recording file, or None if not found.
+    `folder` is only a hint: anything that points outside the recordings directory is
+    ignored, and the search never leaves it either (S4)."""
+    filename = os.path.basename(filename or "")
+    if not filename or filename in (".", ".."):
+        return None
     if folder:
-        candidate = os.path.join(RECORDINGS_DIR, folder, filename)
-        if os.path.exists(candidate):
+        try:
+            candidate = _resolve_in_recordings(folder, filename)
+        except ValueError:
+            candidate = None
+        if candidate and os.path.isfile(candidate):
             return candidate
-    for root, _dirs, filenames in os.walk(RECORDINGS_DIR):
+    for root, _dirs, filenames in os.walk(_RECORDINGS_ROOT):
         if filename in filenames:
             return os.path.join(root, filename)
     return None
@@ -561,7 +604,8 @@ async def move_recording(body: dict):
     if not src:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    dest_dir = os.path.join(RECORDINGS_DIR, to_folder) if to_folder else RECORDINGS_DIR
+    to_folder = _safe_folder(to_folder)   # S4: validated before anything is created or moved
+    dest_dir = _resolve_in_recordings(to_folder) if to_folder else _RECORDINGS_ROOT
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, os.path.basename(filename))
 
@@ -596,7 +640,10 @@ async def create_folder(body: dict):
     if not folder:
         raise HTTPException(status_code=400, detail="folder name required")
 
-    folder_path = os.path.join(RECORDINGS_DIR, folder)
+    folder = _safe_folder(folder)   # S4
+    if not folder:
+        raise HTTPException(status_code=400, detail="folder name required")
+    folder_path = _resolve_in_recordings(folder)
     os.makedirs(folder_path, exist_ok=True)
 
     keep = os.path.join(folder_path, ".keep")

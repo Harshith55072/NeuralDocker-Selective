@@ -172,12 +172,15 @@ def write_output(tunnels: list[dict], output_path: Path, fmt: str) -> None:
 # ---------------------------------------------------------------------------
 # Helper: push tunnel URL to backend
 # ---------------------------------------------------------------------------
-BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8081") 
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8080") 
 # Service token — must match service.token in application.properties 
 # Set via environment variable, never hardcode in production 
-SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "nd-service-token-change-me-in-production") 
+SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "") 
  
 def _push_tunnel_to_backend(tunnels: list) -> bool:
+    if not SERVICE_TOKEN:
+        log.error("SERVICE_TOKEN is not set - refusing to push tunnel URLs. Run run.bat / setup.sh.")
+        return False
     endpoint = f"{BACKEND_URL}/api/v1/clusters/register-tunnel"
     headers = {
         "Content-Type": "application/json",

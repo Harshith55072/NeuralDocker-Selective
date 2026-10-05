@@ -11,14 +11,25 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component; 
 import org.springframework.web.filter.OncePerRequestFilter; 
  
-import java.io.IOException; 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest; 
 import java.util.List; 
  
 @Component 
 public class ServiceTokenFilter extends OncePerRequestFilter { 
  
     @Value("${service.token}") 
-    private String serviceToken; 
+    private String serviceToken;
+
+    // Constant-time comparison so response timing can't be used to guess the token.
+    // An unset/blank expected token never matches (SecretsValidator also blocks startup).
+    private static boolean constantTimeEquals(String provided, String expected) {
+        if (provided == null || expected == null || expected.isBlank()) return false;
+        return MessageDigest.isEqual(
+                provided.getBytes(StandardCharsets.UTF_8),
+                expected.getBytes(StandardCharsets.UTF_8));
+    } 
  
     // Endpoints that internal services are allowed to call 
     private static final List<String> SERVICE_ALLOWED_PATHS = List.of( 
@@ -45,7 +56,7 @@ public class ServiceTokenFilter extends OncePerRequestFilter {
  
         String serviceHeader = request.getHeader("X-Service-Token"); 
  
-        if (serviceHeader != null && serviceHeader.equals(serviceToken)) { 
+        if (serviceHeader != null && constantTimeEquals(serviceHeader, serviceToken)) { 
             // Valid service token — create a synthetic authentication 
             // so Spring Security treats this request as authenticated 
             UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken( 

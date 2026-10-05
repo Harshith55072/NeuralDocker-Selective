@@ -11,6 +11,9 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import com.example.Neural_docker_selective_backend.security.JwtService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.ClientHttpRequestInterceptor;
 import org.springframework.web.client.RestTemplate;
 
 @Configuration
@@ -46,21 +49,37 @@ public class ApplicationConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * Every outgoing call made with these RestTemplates goes to an AI service (this
+     * machine's, or another cluster node's through its tunnel), and the AI service
+     * requires a JWT (audit finding S3). A fresh short-lived token is minted per request.
+     */
+    private static ClientHttpRequestInterceptor aiServiceAuth(JwtService jwtService) {
+        return (request, body, execution) -> {
+            request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + jwtService.generateAiServiceToken());
+            return execution.execute(request, body);
+        };
+    }
+
     @Bean
-    public RestTemplate restTemplate() {
+    public RestTemplate restTemplate(JwtService jwtService) {
         org.springframework.http.client.SimpleClientHttpRequestFactory factory = 
             new org.springframework.http.client.SimpleClientHttpRequestFactory(); 
         factory.setConnectTimeout(10000);   // 10s connect 
-        factory.setReadTimeout(300000);     // 5 minutes — covers generate + rate for slow CPU models 
-        return new RestTemplate(factory); 
+        factory.setReadTimeout(300000);     // 5 minutes, covers generate + rate for slow CPU models
+        RestTemplate template = new RestTemplate(factory);
+        template.getInterceptors().add(aiServiceAuth(jwtService));
+        return template; 
     }
 
     @Bean("modelLoadRestTemplate")
-    public RestTemplate modelLoadRestTemplate() {
+    public RestTemplate modelLoadRestTemplate(JwtService jwtService) {
         org.springframework.http.client.SimpleClientHttpRequestFactory factory = 
             new org.springframework.http.client.SimpleClientHttpRequestFactory(); 
         factory.setConnectTimeout(5000); 
-        factory.setReadTimeout(600000); // 10 minutes 
-        return new RestTemplate(factory); 
+        factory.setReadTimeout(600000); // 10 minutes
+        RestTemplate template = new RestTemplate(factory);
+        template.getInterceptors().add(aiServiceAuth(jwtService));
+        return template; 
     }
 }

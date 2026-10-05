@@ -71,9 +71,10 @@ public class SecurityConfiguration {
                 // Public cluster discovery — no token needed
                 .requestMatchers("/api/v1/clusters/public").permitAll()
                 .requestMatchers("/api/v1/clusters/public/**").permitAll()
-                // Service endpoints — authenticated via ServiceTokenFilter
-                // before this filter chain runs, so permit here
-                .requestMatchers("/api/v1/clusters/register-tunnel").permitAll()
+                // NOTE: /api/v1/clusters/register-tunnel is deliberately NOT permitAll.
+                // It requires either a valid X-Service-Token (ServiceTokenFilter grants
+                // ROLE_SERVICE) or a JWT of a real local user; ClusterController enforces
+                // which of the two may do what. It falls through to .authenticated() below.
                 // Everything else requires JWT
                 .requestMatchers("/api/v1/clusters/**").authenticated()
                 .anyRequest().authenticated()

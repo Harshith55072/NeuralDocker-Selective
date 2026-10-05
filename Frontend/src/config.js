@@ -86,12 +86,36 @@ export const clearClusterSession = () => {
  * actions, etc.) or 401s from calls that never had a token to begin with
  * (e.g. a failed login attempt itself).
  */
+/**
+ * The local AI service requires a JWT on every request (audit finding S3: it used to be
+ * completely open and is reachable through a public tunnel). Rather than touch every
+ * fetch() call site that talks to it, the global fetch wrapper below adds the logged-in
+ * user's token automatically to any request aimed at the AI service. Requests that already
+ * set their own Authorization header are left alone.
+ */
+const withAiAuth = (args) => {
+    try {
+        const [input, init = {}] = args;
+        const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : null);
+        const token = localStorage.getItem('token');
+        if (!url || !token) return args;
+        const base = getAiAPI().replace(/\/+$/, '');
+        if (url !== base && !url.startsWith(base + '/')) return args;
+        const headers = new Headers(init.headers || {});
+        if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+        return [input, { ...init, headers }];
+    } catch {
+        return args;
+    }
+};
+
 let authFetchPatched = false;
 export const installAuthFetchInterceptor = () => {
     if (authFetchPatched) return;
     authFetchPatched = true;
     const realFetch = window.fetch.bind(window);
-    window.fetch = async (...args) => {
+    window.fetch = async (...originalArgs) => {
+        const args = withAiAuth(originalArgs);
         const response = await realFetch(...args);
         if (response.status === 401) {
             const init = args[1] || {};

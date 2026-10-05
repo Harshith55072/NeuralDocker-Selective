@@ -9,8 +9,10 @@ import platform
 import random
 import re
 from typing import Optional, List, Dict, Callable
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from auth import verify_bearer_token, allowed_origins  # S3: JWT auth (fails fast without JWT_SECRET)
 from pydantic import BaseModel
 import uvicorn
 import httpx
@@ -240,12 +242,35 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Consensus Gateway", version="1.0.0", lifespan=lifespan)
 
+
+# -- Authentication (audit finding S3) ---------------------------------------------
+# Every request needs a valid `Authorization: Bearer <JWT>` signed with the cluster's
+# shared JWT_SECRET (see auth.py). There are deliberately no public endpoints: this
+# service is reachable through a public ngrok tunnel. CORS preflights (OPTIONS) are
+# answered by the CORS middleware below, which sits OUTSIDE this one, so 401 responses
+# still carry CORS headers and the browser shows the real status instead of a CORS error.
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if not verify_bearer_token(request.headers.get("authorization")):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
+# Added AFTER the auth middleware on purpose: the last middleware added is the outermost.
+# Origins are limited to the local frontend (was "*", which let any website the user
+# visits talk to this service on localhost). No cookies are used, so credentials are off.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 

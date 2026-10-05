@@ -289,6 +289,7 @@ public class ClusterController {
     @PostMapping("/register-tunnel")
     public ResponseEntity<?> registerTunnel(
             @RequestBody Map<String, String> body,
+            Authentication authentication,
             @AuthenticationPrincipal UserDetails userDetails,
             HttpServletRequest request) {
         try {
@@ -297,14 +298,27 @@ public class ClusterController {
             if (aiTunnelUrl == null || aiTunnelUrl.isBlank())
                 return ResponseEntity.badRequest().body(Map.of("error", "tunnelUrl is required"));
 
-            // Check if this is a real user (JWT) vs a service call (service token)
-            boolean isRealUser = userDetails != null
+            // Two legitimate callers, and they must stay distinct:
+            //  - the ngrok monitor, authenticated by X-Service-Token => ROLE_SERVICE
+            //  - a real, locally registered user registering THEIR OWN tunnel via JWT
+            // Everyone else (anonymous, or a JWT for an email this host has never seen)
+            // used to fall through to registerTunnelForAllHosts and could overwrite every
+            // host's tunnel URL (audit finding S2). That path is now ROLE_SERVICE only.
+            boolean isService = authentication != null
+                    && authentication.getAuthorities().stream()
+                            .anyMatch(a -> "ROLE_SERVICE".equals(a.getAuthority()));
+            boolean isRealUser = !isService && userDetails != null
                     && userRepository.findByEmail(userDetails.getUsername()).isPresent();
 
             if (isRealUser) {
                 // A logged-in user is registering their own tunnel URL
                 clusterService.registerTunnel(userDetails.getUsername(), aiTunnelUrl);
                 return ResponseEntity.ok(Map.of("status", "registered", "tunnelUrl", aiTunnelUrl));
+            }
+
+            if (!isService) {
+                return ResponseEntity.status(403)
+                        .body(Map.of("error", "Only the local tunnel monitor or a registered local user may register a tunnel"));
             }
 
             // Registers for every cluster this machine hosts. IP-based per-host
